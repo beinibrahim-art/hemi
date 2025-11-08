@@ -348,13 +348,12 @@ class VideoDownloader:
                     else:
                         raise Exception(f"فشل تحميل فيديو TikTok: {error_msg}")
             
-            # لـ YouTube Shorts، استخدام إعدادات خاصة
+            # لـ YouTube Shorts، استخدام إعدادات خاصة - استخدام web فقط لتجنب مشاكل PO Token
             if is_shorts:
-                logger.info("Detected YouTube Shorts - using special handling")
-                # محاولة clients مختلفة لـ YouTube Shorts - تقليل المحاولات لتسريع العملية
-                clients_to_try = ['ios', 'android', 'web']
+                logger.info("Detected YouTube Shorts - using web client only")
+                clients_to_try = ['web']  # استخدام web فقط لتجنب مشاكل PO Token
             else:
-                clients_to_try = ['web']  # استخدام web فقط لتسريع العملية
+                clients_to_try = ['web']  # استخدام web فقط لتسريع العملية وتجنب المشاكل
             
             # محاولة التحميل مع clients مختلفة
             last_error = None
@@ -365,40 +364,55 @@ class VideoDownloader:
                     # محاولة التحميل مع fallback للتنسيقات - تحسين لضمان mp4 وجودة جيدة
                     formats_to_try = []
                     
-                    # لـ YouTube Shorts، استخدام تنسيقات أبسط
+                    # لـ YouTube Shorts، استخدام تنسيقات أبسط مع دعم SABR streaming
                     if is_shorts:
                         formats_to_try = [
-                            'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',  # mp4 أولاً
+                            'best[height<=1080][ext=mp4]/best[height<=1080]/best[ext=mp4]/best',  # أفضل جودة متاحة
+                            'best[ext=mp4]/best',  # mp4 أولاً
+                            'bestvideo+bestaudio/best',  # دمج فيديو وصوت
                             'best',  # أفضل تنسيق متاح
-                            None  # بدون format محدد
+                            None  # بدون format محدد - yt-dlp سيختار تلقائياً
                         ]
                     elif quality == 'best':
                         formats_to_try = [
-                            'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',  # mp4 مع avc1
-                            'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',  # mp4 عادي
+                            'bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=2160]+bestaudio/best[height<=2160][ext=mp4]/best[height<=2160]/best',  # 4K
+                            'bestvideo[height<=1440][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1440]+bestaudio/best[height<=1440][ext=mp4]/best[height<=1440]/best',  # 2K
+                            'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080][ext=mp4]/best[height<=1080]/best',  # Full HD
+                            'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best',  # mp4 عادي
                             'best',  # أفضل تنسيق متاح
                             None  # بدون format محدد
                         ]
                     elif quality == '720p' or quality == 'medium':
                         formats_to_try = [
-                            'bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
-                            'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
-                            'best[height<=720]/best',
+                            'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720][ext=mp4]/best[height<=720]/best',
+                            'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
                             None
                         ]
                     elif quality == '480p' or quality == 'low':
                         formats_to_try = [
-                            'bestvideo[height<=480][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best',
-                            'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best',
-                            'best[height<=480]/best',
+                            'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480][ext=mp4]/best[height<=480]/best',
+                            'bestvideo[height<=480]+bestaudio/best[height<=480]/best',
                             None
                         ]
+                    elif quality.startswith('1080p') or quality.startswith('1440p') or quality.startswith('2160p'):
+                        # دعم الجودات العالية
+                        try:
+                            height = int(quality.replace('p', ''))
+                            formats_to_try = [
+                                f'bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={height}]+bestaudio/best[height<={height}][ext=mp4]/best[height<={height}]/best',
+                                f'bestvideo[height<={height}]+bestaudio/best[height<={height}]/best',
+                                'best',
+                                None
+                            ]
+                        except:
+                            formats_to_try = ['best', None]
                     elif quality == 'audio':
                         formats_to_try = [
                             'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
                             None
                         ]
                     else:
+                        # محاولة استخدام quality مباشرة مع fallback
                         formats_to_try = [quality, 'best[ext=mp4]/best', 'best', None]
                     
                     for format_str in formats_to_try:
@@ -770,11 +784,35 @@ class VideoProcessor:
         if not settings:
             settings = {}
         
-        subtitle_path_escaped = subtitle_path.replace("'", "'\\''")
+        # التأكد من أن المسار موجود
+        if not os.path.exists(subtitle_path):
+            logger.error(f"Subtitle file not found: {subtitle_path}")
+            raise Exception(f"ملف الترجمة غير موجود: {subtitle_path}")
+        
+        # استخدام مسار مطلق
+        abs_subtitle_path = os.path.abspath(subtitle_path)
+        logger.info(f"Using subtitle path: {abs_subtitle_path}")
+        
+        # Escape المسار بشكل صحيح لـ FFmpeg (يعمل على Windows و Mac)
+        # FFmpeg يتعامل مع المسارات بشكل مختلف حسب النظام
+        import platform
+        if platform.system() == 'Windows':
+            # Windows: استخدام backslash مع escape
+            subtitle_path_escaped = abs_subtitle_path.replace("\\", "\\\\")
+            subtitle_path_escaped = subtitle_path_escaped.replace(":", "\\:")
+        else:
+            # Unix/Mac: استخدام forward slash
+            subtitle_path_escaped = abs_subtitle_path.replace("\\", "/")
+            subtitle_path_escaped = subtitle_path_escaped.replace(":", "\\:")
+        
+        # Escape للـ shell
+        subtitle_path_escaped = subtitle_path_escaped.replace("'", "'\\''")
         subtitle_path_escaped = f"'{subtitle_path_escaped}'"
         
         if subtitle_path.endswith('.ass'):
-            return f"ass={subtitle_path_escaped}"
+            filter_str = f"ass={subtitle_path_escaped}"
+            logger.info(f"ASS filter: {filter_str}")
+            return filter_str
         
         filter_str = f"subtitles={subtitle_path_escaped}"
         style_options = []
@@ -810,6 +848,7 @@ class VideoProcessor:
             style_str = ','.join(style_options)
             filter_str = f"{filter_str}:force_style='{style_str}'"
         
+        logger.info(f"Subtitle filter: {filter_str}")
         return filter_str
     
     @staticmethod
@@ -1259,6 +1298,14 @@ def api_instant_translate():
             with open(ass_path, 'w', encoding='utf-8') as f:
                 f.write(ass_content)
             
+            # التأكد من أن الملف تم إنشاؤه بنجاح
+            if not os.path.exists(ass_path):
+                logger.error(f"Failed to create ASS file: {ass_path}")
+                return jsonify({'success': False, 'message': 'فشل إنشاء ملف الترجمة'}), 500
+            
+            logger.info(f"ASS file created successfully: {ass_path}")
+            logger.info(f"ASS file size: {os.path.getsize(ass_path)} bytes")
+            
             output_filename = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
             output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
             
@@ -1271,6 +1318,15 @@ def api_instant_translate():
                 'position': position,
                 'vertical_offset': vertical_offset
             }
+            
+            # التأكد من أن ملف ASS موجود قبل الدمج
+            if not os.path.exists(ass_path):
+                logger.error(f"ASS file not found: {ass_path}")
+                return jsonify({'success': False, 'message': f'ملف الترجمة غير موجود: {ass_path}'}), 500
+            
+            logger.info(f"Merging video: {video_file}")
+            logger.info(f"Using ASS file: {ass_path}")
+            logger.info(f"ASS file exists: {os.path.exists(ass_path)}")
             
             result = VideoProcessor.merge_subtitles(
                 video_file,
@@ -1718,12 +1774,14 @@ def api_get_qualities():
                     }
                 }
             elif platform == 'youtube':
-                # محاولة عدة clients للحصول على جميع الجودات
+                # استخدام web client فقط لتجنب مشاكل PO Token
                 ydl_opts['extractor_args'] = {
                     'youtube': {
-                        'player_client': ['android', 'ios', 'web'],  # محاولة جميع clients
+                        'player_client': ['web'],  # استخدام web فقط
                     }
                 }
+                # إضافة إعدادات للتعامل مع SABR streaming
+                ydl_opts['format_sort'] = ['res', 'ext:mp4:m4a', 'codec', 'size']
             elif platform == 'instagram':
                 ydl_opts['http_headers'] = {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
