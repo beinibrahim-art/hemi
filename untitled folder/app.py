@@ -346,12 +346,22 @@ class SubtitleProcessor:
         font_size = int(settings.get('fontSize', settings.get('font_size', 24)))
         font_color = str(settings.get('fontColor', settings.get('font_color', '#FFFFFF')))
         bg_color = str(settings.get('bgColor', settings.get('bg_color', '#000000')))
-        bg_opacity = int(settings.get('bgOpacity', settings.get('bg_opacity', 180)))
+        
+        # التأكد من تحويل bg_opacity إلى int بشكل آمن
+        bg_opacity_raw = settings.get('bgOpacity', settings.get('bg_opacity', 180))
+        if isinstance(bg_opacity_raw, str):
+            try:
+                bg_opacity = int(bg_opacity_raw)
+            except (ValueError, TypeError):
+                bg_opacity = 180
+        else:
+            bg_opacity = int(bg_opacity_raw)
+        
         position = str(settings.get('position', 'bottom'))
         font_family = str(settings.get('fontFamily', settings.get('font_name', 'Arial')))
         
         # التأكد من أن bg_opacity في النطاق الصحيح (0-255)
-        bg_opacity = max(0, min(255, bg_opacity))
+        bg_opacity = max(0, min(255, int(bg_opacity)))
         
         # تحويل ألوان RGB إلى BGR
         def rgb_to_bgr(hex_color):
@@ -470,20 +480,23 @@ class VideoProcessor:
                 
                 subtitle_path = str(Path(ass_path).resolve())
             
-            # Escape المسار للـ ffmpeg
-            # المشكلة: f-string يحاول تفسير أحرف خاصة في المسار
-            # الحل: استخدام string concatenation بدلاً من f-string
+            # Escape المسار للـ ffmpeg بشكل صحيح
             import platform
+            
+            # Escape المسار بشكل آمن على جميع الأنظمة
             if platform.system() == 'Windows':
+                # على Windows، استخدام المسار كما هو مع escape للـ :
                 subtitle_path_escaped = subtitle_path.replace('\\', '/').replace(':', '\\:')
             else:
                 # على Linux/Mac، escape المسافات والأحرف الخاصة
-                subtitle_path_escaped = subtitle_path.replace('\\', '\\\\').replace(' ', '\\ ')
+                subtitle_path_escaped = subtitle_path.replace('\\', '\\\\').replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:')
             
-            # دمج مع الفيديو
-            # استخدام string concatenation لتجنب مشاكل f-string
-            vf_filter = 'ass=' + subtitle_path_escaped
+            # دمج مع الفيديو باستخدام filter ASS
+            # استخدام ass filter مباشرة (أفضل للترجمة الوقتية)
+            # إذا فشل، سيتم استخدام subtitles filter كبديل في الكود أدناه
+            vf_filter = f"ass={subtitle_path_escaped}"
             
+            # محاولة استخدام ass filter أولاً (أفضل للترجمة الوقتية)
             cmd = [
                 'ffmpeg',
                 '-i', video_path,
@@ -498,13 +511,40 @@ class VideoProcessor:
             ]
             
             logger.info(f"Running ffmpeg command: {' '.join(cmd)}")
+            logger.info(f"Subtitle file: {subtitle_path}")
+            logger.info(f"Subtitle file exists: {os.path.exists(subtitle_path)}")
             
             process = subprocess.run(cmd, capture_output=True, timeout=600, text=True)
             
             if process.returncode != 0:
-                logger.error(f"FFmpeg error: {process.stderr}")
-                return False
+                logger.error(f"FFmpeg error (ass filter): {process.stderr}")
+                logger.info("Trying with subtitles filter as fallback...")
+                
+                # محاولة بديلة: استخدام subtitles filter
+                vf_filter_alt = f"subtitles={subtitle_path_escaped}"
+                cmd_alt = [
+                    'ffmpeg',
+                    '-i', video_path,
+                    '-vf', vf_filter_alt,
+                    '-c:a', 'copy',
+                    '-c:v', 'libx264',
+                    '-preset', 'fast',
+                    '-crf', '23',
+                    '-threads', '0',
+                    '-y',
+                    output_path
+                ]
+                
+                process_alt = subprocess.run(cmd_alt, capture_output=True, timeout=600, text=True)
+                
+                if process_alt.returncode != 0:
+                    logger.error(f"FFmpeg error (subtitles filter): {process_alt.stderr}")
+                    return False
+                else:
+                    logger.info("Successfully merged with subtitles filter")
+                    return True
             
+            logger.info("Successfully merged subtitles with ass filter")
             return True
             
         except Exception as e:
@@ -1195,20 +1235,25 @@ def api_instant_translate():
             
             result = whisper_transcriber.transcribe(audio_file, model, language)
             
-            # حفظ في ملف مؤقت
-            temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            # حفظ في ملف مؤقت (JSON للحفاظ على segments مع التوقيتات)
+            temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(result, f, ensure_ascii=False, indent=2)
             
+            # إرجاع النتيجة مع segments للتأكد من استخدام التوقيتات
             return jsonify({
                 'success': True,
                 'temp_file': temp_file.name,
+                'text': result.get('text', ''),
+                'language': result.get('language', language),
+                'segments': result.get('segments', []),
                 **result
             })
         
         elif step == 'translate':
             text = data.get('text')
             source_lang = data.get('source_lang', 'auto')
+            segments = data.get('segments')  # دعم ترجمة segments مع التوقيتات
             
             if not text:
                 return jsonify({
@@ -1223,18 +1268,53 @@ def api_instant_translate():
                 }), 503
             
             translator = GoogleTranslator(source=source_lang, target='ar')
-            translated = translator.translate(text)
             
-            # حفظ في ملف مؤقت
-            temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                f.write(translated)
-            
-            return jsonify({
-                'success': True,
-                'translated_text': translated,
-                'temp_file': temp_file.name
-            })
+            # إذا كانت هناك segments مع توقيتات، ترجم كل segment بشكل منفصل
+            if segments and isinstance(segments, list):
+                translated_segments = []
+                for seg in segments:
+                    seg_text = seg.get('text', '').strip()
+                    if seg_text:
+                        try:
+                            translated_text = translator.translate(seg_text)
+                            translated_segments.append({
+                                'start': seg.get('start', 0),
+                                'end': seg.get('end', 0),
+                                'text': translated_text
+                            })
+                        except Exception as e:
+                            logger.warning(f"Translation failed for segment: {e}")
+                            translated_segments.append({
+                                'start': seg.get('start', 0),
+                                'end': seg.get('end', 0),
+                                'text': seg_text
+                            })
+                
+                # حفظ segments المترجمة
+                temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    json.dump({'translated_segments': translated_segments, 'text': ' '.join([s['text'] for s in translated_segments])}, f, ensure_ascii=False, indent=2)
+                
+                return jsonify({
+                    'success': True,
+                    'translated_text': ' '.join([s['text'] for s in translated_segments]),
+                    'translated_segments': translated_segments,
+                    'temp_file': temp_file.name
+                })
+            else:
+                # ترجمة نص عادي
+                translated = translator.translate(text)
+                
+                # حفظ في ملف مؤقت
+                temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    f.write(translated)
+                
+                return jsonify({
+                    'success': True,
+                    'translated_text': translated,
+                    'temp_file': temp_file.name
+                })
         
         elif step == 'merge':
             logger.info(f"Merge step called with data keys: {list(data.keys())}")
@@ -1302,18 +1382,30 @@ def api_instant_translate():
                         'message': f'ملف الفيديو غير موجود: {video_file}'
                     }), 400
             
+            # التأكد من تحويل جميع القيم إلى الأنواع الصحيحة
             settings = {
-                'fontSize': data.get('fontSize', data.get('font_size', 24)),
-                'fontColor': data.get('fontColor', data.get('font_color', '#FFFFFF')),
-                'bgColor': data.get('bgColor', data.get('bg_color', '#000000')),
-                'bgOpacity': data.get('bgOpacity', data.get('bg_opacity', 180)),
-                'position': data.get('position', 'bottom'),
-                'fontFamily': data.get('fontFamily', data.get('font_name', 'Arial'))
+                'fontSize': int(data.get('fontSize', data.get('font_size', 24))),
+                'fontColor': str(data.get('fontColor', data.get('font_color', '#FFFFFF'))),
+                'bgColor': str(data.get('bgColor', data.get('bg_color', '#000000'))),
+                'bgOpacity': int(data.get('bgOpacity', data.get('bg_opacity', 180))),
+                'position': str(data.get('position', 'bottom')),
+                'fontFamily': str(data.get('fontFamily', data.get('font_name', 'Arial')))
             }
             
-            # إنشاء SRT من النص المترجم
+            # إنشاء SRT من النص المترجم مع التوقيتات الصحيحة
             # إذا كان النص ليس بصيغة SRT، نحوله إلى SRT
             if not subtitle_text.strip().startswith('1\n') and not subtitle_text.strip().startswith('WEBVTT'):
+                # محاولة استخدام segments المترجمة من ملف JSON إذا كانت متوفرة
+                translated_segments_data = None
+                if data.get('temp_translated_file'):
+                    temp_translated_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_translated_file']
+                    if temp_translated_path.exists() and temp_translated_path.suffix == '.json':
+                        try:
+                            with open(temp_translated_path, 'r', encoding='utf-8') as f:
+                                translated_segments_data = json.load(f)
+                        except:
+                            pass
+                
                 # محاولة استخدام segments من transcript إذا كانت متوفرة
                 transcript_data = None
                 if data.get('temp_transcript_file'):
@@ -1325,29 +1417,75 @@ def api_instant_translate():
                         except:
                             pass
                 
-                if transcript_data and transcript_data.get('segments'):
-                    # استخدام segments من Whisper مع النص المترجم
+                # الحالة المثلى: استخدام segments المترجمة مع التوقيتات
+                if translated_segments_data and translated_segments_data.get('translated_segments'):
+                    segments = translated_segments_data['translated_segments']
+                    srt_lines = []
+                    for i, seg in enumerate(segments, 1):
+                        start = float(seg.get('start', 0))
+                        end = float(seg.get('end', start + 3))
+                        text = seg.get('text', '').strip()
+                        
+                        if text:
+                            start_str = SubtitleProcessor._format_time(start)
+                            end_str = SubtitleProcessor._format_time(end)
+                            
+                            srt_lines.append(f"{i}")
+                            srt_lines.append(f"{start_str} --> {end_str}")
+                            srt_lines.append(text)
+                            srt_lines.append("")
+                    
+                    if srt_lines:
+                        subtitle_text = '\n'.join(srt_lines)
+                
+                # الحالة الثانية: استخدام segments من transcript مع النص المترجم
+                elif transcript_data and transcript_data.get('segments'):
                     segments = transcript_data['segments']
-                    translated_segments = subtitle_text.split('\n')
+                    # تقسيم النص المترجم إلى جمل (محاولة ذكية)
+                    translated_text = subtitle_text.strip()
+                    
+                    # إذا كان النص المترجم يحتوي على فواصل، استخدمها
+                    if '\n' in translated_text:
+                        translated_lines = [line.strip() for line in translated_text.split('\n') if line.strip()]
+                    else:
+                        # تقسيم ذكي حسب عدد segments
+                        words = translated_text.split()
+                        if len(words) > 0 and len(segments) > 0:
+                            words_per_segment = max(1, len(words) // len(segments))
+                            translated_lines = []
+                            for i in range(0, len(words), words_per_segment):
+                                translated_lines.append(' '.join(words[i:i+words_per_segment]))
+                        else:
+                            translated_lines = [translated_text]
                     
                     srt_lines = []
                     for i, seg in enumerate(segments):
-                        if i < len(translated_segments) and translated_segments[i].strip():
-                            start_str = SubtitleProcessor._format_time(seg.get('start', i * 3))
-                            end_str = SubtitleProcessor._format_time(seg.get('end', (i + 1) * 3))
+                        start = float(seg.get('start', 0))
+                        end = float(seg.get('end', start + 3))
+                        
+                        # استخدام النص المترجم المقابل
+                        if i < len(translated_lines):
+                            text = translated_lines[i]
+                        else:
+                            # إذا لم يكن هناك نص مترجم كافٍ، استخدم النص الأصلي
+                            text = seg.get('text', '').strip()
+                        
+                        if text:
+                            start_str = SubtitleProcessor._format_time(start)
+                            end_str = SubtitleProcessor._format_time(end)
                             
-                            srt_lines.append(f"{i + 1}")
+                            srt_lines.append(f"{len(srt_lines) // 4 + 1}")
                             srt_lines.append(f"{start_str} --> {end_str}")
-                            srt_lines.append(translated_segments[i].strip())
+                            srt_lines.append(text)
                             srt_lines.append("")
                     
                     if srt_lines:
                         subtitle_text = '\n'.join(srt_lines)
                     else:
                         # Fallback: تحويل النص العادي إلى SRT بسيط
-                        segments = subtitle_text.split('\n')
+                        lines = subtitle_text.split('\n')
                         srt_lines = []
-                        for i, line in enumerate(segments, 1):
+                        for i, line in enumerate(lines, 1):
                             if line.strip():
                                 start_time = (i - 1) * 3
                                 end_time = i * 3
@@ -1362,9 +1500,9 @@ def api_instant_translate():
                         subtitle_text = '\n'.join(srt_lines)
                 else:
                     # Fallback: تحويل النص العادي إلى SRT بسيط
-                    segments = subtitle_text.split('\n')
+                    lines = subtitle_text.split('\n')
                     srt_lines = []
-                    for i, line in enumerate(segments, 1):
+                    for i, line in enumerate(lines, 1):
                         if line.strip():
                             start_time = (i - 1) * 3
                             end_time = i * 3
