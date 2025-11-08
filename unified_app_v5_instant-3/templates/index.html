@@ -1635,10 +1635,26 @@
 
         // Initialize on load
         document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM Content Loaded - Initializing event listeners...');
+            
+            // Verify critical libraries
+            if (typeof bootstrap === 'undefined') {
+                console.error('Bootstrap JS is not loaded!');
+                alert('خطأ: لم يتم تحميل Bootstrap. يرجى إعادة تحميل الصفحة.');
+            }
+            if (typeof axios === 'undefined') {
+                console.error('Axios is not loaded!');
+                alert('خطأ: لم يتم تحميل Axios. يرجى إعادة تحميل الصفحة.');
+            }
+            
             // Attach event listener to instant start button
             const instantStartBtn = document.getElementById('instantStartBtn');
             if (instantStartBtn) {
-                instantStartBtn.addEventListener('click', function() {
+                console.log('Found instantStartBtn, attaching listener...');
+                instantStartBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('instantStartBtn clicked');
                     if (typeof window.startInstantTranslation === 'function') {
                         window.startInstantTranslation();
                     } else if (typeof startInstantTranslation === 'function') {
@@ -1648,12 +1664,18 @@
                         alert('خطأ: الدالة غير متاحة. يرجى إعادة تحميل الصفحة.');
                     }
                 });
+            } else {
+                console.error('instantStartBtn not found!');
             }
             
             // Attach event listener to download start button
             const downloadStartBtn = document.getElementById('downloadStartBtn');
             if (downloadStartBtn) {
-                downloadStartBtn.addEventListener('click', function() {
+                console.log('Found downloadStartBtn, attaching listener...');
+                downloadStartBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('downloadStartBtn clicked');
                     if (typeof window.startDownload === 'function') {
                         window.startDownload();
                     } else if (typeof startDownload === 'function') {
@@ -1663,40 +1685,66 @@
                         alert('خطأ: الدالة غير متاحة. يرجى إعادة تحميل الصفحة.');
                     }
                 });
+            } else {
+                console.error('downloadStartBtn not found!');
             }
             
             // Attach event listeners to other buttons
             const mergeBtn = document.getElementById('mergeBtn');
             if (mergeBtn) {
-                mergeBtn.addEventListener('click', function() {
+                console.log('Found mergeBtn, attaching listener...');
+                mergeBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('mergeBtn clicked');
                     if (typeof window.startMerge === 'function') {
                         window.startMerge();
                     } else if (typeof startMerge === 'function') {
                         startMerge();
+                    } else {
+                        console.error('startMerge function not found');
                     }
                 });
+            } else {
+                console.error('mergeBtn not found!');
             }
             
             const translateBtn = document.getElementById('translateStartBtn');
             if (translateBtn) {
-                translateBtn.addEventListener('click', function() {
+                console.log('Found translateStartBtn, attaching listener...');
+                translateBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('translateStartBtn clicked');
                     if (typeof window.startTranslate === 'function') {
                         window.startTranslate();
                     } else if (typeof startTranslate === 'function') {
                         startTranslate();
+                    } else {
+                        console.error('startTranslate function not found');
                     }
                 });
+            } else {
+                console.error('translateStartBtn not found!');
             }
             
             const transcribeBtn = document.getElementById('transcribeStartBtn');
             if (transcribeBtn) {
-                transcribeBtn.addEventListener('click', function() {
+                console.log('Found transcribeStartBtn, attaching listener...');
+                transcribeBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('transcribeStartBtn clicked');
                     if (typeof window.startTranscribe === 'function') {
                         window.startTranscribe();
                     } else if (typeof startTranscribe === 'function') {
                         startTranscribe();
+                    } else {
+                        console.error('startTranscribe function not found');
                     }
                 });
+            } else {
+                console.error('transcribeStartBtn not found!');
             }
             
             setupDragDrop();
@@ -1704,7 +1752,43 @@
             updatePreview();
             displayQualities([]);
             
-            // Setup sliders
+            // Setup instant translation event listeners
+            const instantFontSize = document.getElementById('instantFontSize');
+            if (instantFontSize) {
+                instantFontSize.addEventListener('input', function() {
+                    updateInstantPreview();
+                });
+            }
+            
+            const instantBgOpacity = document.getElementById('instantBgOpacity');
+            if (instantBgOpacity) {
+                instantBgOpacity.addEventListener('input', function() {
+                    updateInstantPreview();
+                });
+            }
+            
+            const instantVerticalOffset = document.getElementById('instantVerticalOffset');
+            if (instantVerticalOffset) {
+                instantVerticalOffset.addEventListener('input', function() {
+                    updateInstantPreview();
+                });
+            }
+            
+            const instantFontColor = document.getElementById('instantFontColor');
+            if (instantFontColor) {
+                instantFontColor.addEventListener('input', function() {
+                    updateInstantPreview();
+                });
+            }
+            
+            const instantBgColor = document.getElementById('instantBgColor');
+            if (instantBgColor) {
+                instantBgColor.addEventListener('input', function() {
+                    updateInstantPreview();
+                });
+            }
+            
+            // Setup sliders for subtitle editor
             const fontSizeSlider = document.getElementById('fontSize');
             if (fontSizeSlider) {
                 fontSizeSlider.addEventListener('input', function() {
@@ -1724,7 +1808,7 @@
                 });
             }
             
-            // Setup color inputs
+            // Setup color inputs for subtitle editor
             const fontColorInput = document.getElementById('fontColor');
             if (fontColorInput) {
                 fontColorInput.addEventListener('input', function() {
@@ -1746,6 +1830,44 @@
                     updatePreview();
                 });
             }
+            
+            // Setup transcribe mode switching
+            const fileModeRadio = document.getElementById('transcribeModeFile');
+            const urlModeRadio = document.getElementById('transcribeModeUrl');
+            const fileModeDiv = document.getElementById('transcribeFileMode');
+            const urlModeDiv = document.getElementById('transcribeUrlMode');
+            
+            if (fileModeRadio && urlModeRadio) {
+                fileModeRadio.addEventListener('change', function() {
+                    if (this.checked) {
+                        if (fileModeDiv) fileModeDiv.style.display = 'block';
+                        if (urlModeDiv) urlModeDiv.style.display = 'none';
+                    }
+                });
+                
+                urlModeRadio.addEventListener('change', function() {
+                    if (this.checked) {
+                        if (fileModeDiv) fileModeDiv.style.display = 'none';
+                        if (urlModeDiv) urlModeDiv.style.display = 'block';
+                    }
+                });
+            }
+            
+            // Update storage info
+            updateStorageInfo();
+            // Update every 30 seconds
+            setInterval(updateStorageInfo, 30000);
+            
+            console.log('All event listeners initialized successfully!');
+            console.log('Available functions:', {
+                startInstantTranslation: typeof window.startInstantTranslation,
+                startDownload: typeof window.startDownload,
+                startMerge: typeof window.startMerge,
+                startTranslate: typeof window.startTranslate,
+                startTranscribe: typeof window.startTranscribe,
+                checkQualities: typeof window.checkQualities,
+                showCleanupModal: typeof window.showCleanupModal
+            });
         });
 
         function updateInstantProgress(percentage, message) {
@@ -2041,43 +2163,7 @@
             }
         }
 
-        // Setup instant translation event listeners
-        document.addEventListener('DOMContentLoaded', function() {
-            const instantFontSize = document.getElementById('instantFontSize');
-            if (instantFontSize) {
-                instantFontSize.addEventListener('input', function() {
-                    updateInstantPreview();
-                });
-            }
-            
-            const instantBgOpacity = document.getElementById('instantBgOpacity');
-            if (instantBgOpacity) {
-                instantBgOpacity.addEventListener('input', function() {
-                    updateInstantPreview();
-                });
-            }
-            
-            const instantVerticalOffset = document.getElementById('instantVerticalOffset');
-            if (instantVerticalOffset) {
-                instantVerticalOffset.addEventListener('input', function() {
-                    updateInstantPreview();
-                });
-            }
-            
-            const instantFontColor = document.getElementById('instantFontColor');
-            if (instantFontColor) {
-                instantFontColor.addEventListener('input', function() {
-                    updateInstantPreview();
-                });
-            }
-            
-            const instantBgColor = document.getElementById('instantBgColor');
-            if (instantBgColor) {
-                instantBgColor.addEventListener('input', function() {
-                    updateInstantPreview();
-                });
-            }
-        });
+        // Note: Instant translation event listeners are already set up in the main DOMContentLoaded handler above
 
         // === DOWNLOAD FUNCTIONS ===
         async function checkQualities() {
@@ -2626,29 +2712,7 @@
         }
 
         // === TRANSCRIBE FUNCTIONS ===
-        // Mode switching
-        document.addEventListener('DOMContentLoaded', function() {
-            const fileModeRadio = document.getElementById('transcribeModeFile');
-            const urlModeRadio = document.getElementById('transcribeModeUrl');
-            const fileModeDiv = document.getElementById('transcribeFileMode');
-            const urlModeDiv = document.getElementById('transcribeUrlMode');
-            
-            if (fileModeRadio && urlModeRadio) {
-                fileModeRadio.addEventListener('change', function() {
-                    if (this.checked) {
-                        fileModeDiv.style.display = 'block';
-                        urlModeDiv.style.display = 'none';
-                    }
-                });
-                
-                urlModeRadio.addEventListener('change', function() {
-                    if (this.checked) {
-                        fileModeDiv.style.display = 'none';
-                        urlModeDiv.style.display = 'block';
-                    }
-                });
-            }
-        });
+        // Note: Mode switching is set up in the main DOMContentLoaded handler above
         
         async function startTranscribe() {
             const mode = document.querySelector('input[name="transcribeMode"]:checked').value;
@@ -3120,23 +3184,4 @@
             }
         }
         
-        // Update storage info on page load and periodically
-        document.addEventListener('DOMContentLoaded', function() {
-            // Verify Bootstrap is loaded
-            if (typeof bootstrap === 'undefined') {
-                console.error('Bootstrap JS is not loaded!');
-                alert('خطأ: لم يتم تحميل Bootstrap. يرجى إعادة تحميل الصفحة.');
-                return;
-            }
-            
-            // Verify Axios is loaded
-            if (typeof axios === 'undefined') {
-                console.error('Axios is not loaded!');
-                alert('خطأ: لم يتم تحميل Axios. يرجى إعادة تحميل الصفحة.');
-                return;
-            }
-            
-            updateStorageInfo();
-            // Update every 30 seconds
-            setInterval(updateStorageInfo, 30000);
-        });
+        // Note: Storage info update is handled in the main DOMContentLoaded handler above
