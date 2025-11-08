@@ -673,6 +673,20 @@
                             <i class="bi bi-download"></i> ابدأ التحميل
                         </button>
                     </div>
+                    
+                    <!-- Download Result -->
+                    <div id="downloadResult" class="hidden mt-6 glass-strong rounded-xl p-6">
+                        <div class="text-center">
+                            <i class="bi bi-check-circle text-5xl text-green-400 mb-4"></i>
+                            <h4 class="text-xl font-bold mb-4">تم التحميل بنجاح!</h4>
+                            <a id="downloadFileLink" href="#" class="btn-primary-glass px-6 py-3 rounded-xl font-semibold inline-block">
+                                <i class="bi bi-download"></i> تحميل الملف
+                            </a>
+                            <button class="btn-glass px-6 py-3 rounded-xl font-semibold mt-3 mr-3" onclick="resetDownload()">
+                                <i class="bi bi-arrow-clockwise"></i> تحميل آخر
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -2168,13 +2182,59 @@
                                 clearInterval(progressInterval);
                                 if (downloadStartBtn) {
                                     downloadStartBtn.innerHTML = '<i class="bi bi-check-circle"></i> تم التحميل!';
+                                    downloadStartBtn.disabled = false;
                                 }
                                 showAlert('تم التحميل بنجاح!', 'success');
                                 
-                                // البحث عن الملف المحمّل
-                                setTimeout(() => {
-                                    window.location.reload(); // إعادة تحميل الصفحة لعرض الملف الجديد
-                                }, 1000);
+                                // البحث عن الملف المحمّل وعرض رابط التحميل
+                                try {
+                                    // محاولة الحصول على معلومات الملف من API
+                                    const fileInfoResponse = await axios.get(`/api/media/progress/${downloadId}`);
+                                    if (fileInfoResponse.data.file) {
+                                        const filePath = fileInfoResponse.data.file;
+                                        let downloadPath = filePath.replace('downloads/', '').replace('downloads\\', '');
+                                        if (downloadPath.includes('/') || downloadPath.includes('\\')) {
+                                            downloadPath = downloadPath.split(/[/\\]/).pop();
+                                        }
+                                        
+                                        // عرض رابط التحميل
+                                        const downloadResult = document.getElementById('downloadResult');
+                                        const downloadFileLink = document.getElementById('downloadFileLink');
+                                        if (downloadResult && downloadFileLink) {
+                                            downloadFileLink.href = `/download/${encodeURIComponent(downloadPath)}`;
+                                            downloadResult.classList.remove('hidden');
+                                        } else {
+                                            // إذا لم يكن هناك قسم للنتيجة، تحميل مباشرة
+                                            window.location.href = `/download/${encodeURIComponent(downloadPath)}`;
+                                        }
+                                    } else {
+                                        // البحث في مجلد downloads عن أحدث ملف
+                                        setTimeout(async () => {
+                                            try {
+                                                const storageResponse = await axios.get('/api/storage-info');
+                                                if (storageResponse.data.success) {
+                                                    // عرض رابط للبحث في مجلد downloads
+                                                    const downloadResult = document.getElementById('downloadResult');
+                                                    const downloadFileLink = document.getElementById('downloadFileLink');
+                                                    if (downloadResult && downloadFileLink) {
+                                                        downloadFileLink.href = '/downloads';
+                                                        downloadFileLink.textContent = 'فتح مجلد التحميلات';
+                                                        downloadResult.classList.remove('hidden');
+                                                    }
+                                                }
+                                            } catch (e) {
+                                                console.error('Error getting storage info:', e);
+                                            }
+                                        }, 500);
+                                    }
+                                } catch (error) {
+                                    console.error('Error getting file info:', error);
+                                    // عرض رسالة نجاح فقط
+                                    const downloadResult = document.getElementById('downloadResult');
+                                    if (downloadResult) {
+                                        downloadResult.classList.remove('hidden');
+                                    }
+                                }
                             } else if (progress.status === 'error') {
                                 clearInterval(progressInterval);
                                 if (downloadStartBtn) {
@@ -2213,7 +2273,17 @@
                         if (downloadPath.includes('/') || downloadPath.includes('\\')) {
                             downloadPath = downloadPath.split(/[/\\]/).pop();
                         }
-                        window.location.href = `/download/${encodeURIComponent(downloadPath)}`;
+                        
+                        // عرض رابط التحميل بدلاً من إعادة تحميل الصفحة
+                        const downloadResult = document.getElementById('downloadResult');
+                        const downloadFileLink = document.getElementById('downloadFileLink');
+                        if (downloadResult && downloadFileLink) {
+                            downloadFileLink.href = `/download/${encodeURIComponent(downloadPath)}`;
+                            downloadResult.classList.remove('hidden');
+                        } else {
+                            // Fallback: تحميل مباشرة
+                            window.location.href = `/download/${encodeURIComponent(downloadPath)}`;
+                        }
                     } else {
                         showAlert(response.data.message || 'فشل التحميل', 'danger');
                         if (downloadStartBtn) {
@@ -2232,6 +2302,39 @@
             }
         };
 
+        // ========== DOWNLOAD RESET FUNCTION ==========
+        window.resetDownload = function() {
+            // إخفاء نتيجة التحميل
+            const downloadResult = document.getElementById('downloadResult');
+            if (downloadResult) {
+                downloadResult.classList.add('hidden');
+            }
+            
+            // إعادة تعيين زر التحميل
+            const downloadStartBtn = document.getElementById('downloadStartBtn');
+            if (downloadStartBtn) {
+                downloadStartBtn.disabled = false;
+                downloadStartBtn.innerHTML = '<i class="bi bi-download"></i> ابدأ التحميل';
+            }
+            
+            // إعادة تعيين الجودة المختارة
+            window.selectedQuality = null;
+            window.selectedQualityCommand = null;
+            
+            // إخفاء قسم الجودات
+            const qualitySection = document.getElementById('qualitySection');
+            if (qualitySection) {
+                qualitySection.classList.add('hidden');
+                qualitySection.classList.remove('quality-selected');
+            }
+            
+            // مسح رابط التحميل
+            const downloadFileLink = document.getElementById('downloadFileLink');
+            if (downloadFileLink) {
+                downloadFileLink.href = '#';
+            }
+        };
+        
         // ========== SUBTITLE EDITOR FUNCTIONS ==========
         window.removeVideo = function() {
             videoFileData = null;

@@ -1087,10 +1087,25 @@ class SmartMediaDownloader:
                 success = self._download_strategy_4(url, download_id, is_audio)
             
             if success:
+                # البحث عن الملف المحمّل
+                download_folder = Path(self.output_dir)
+                video_files = []
+                for file in download_folder.iterdir():
+                    if file.is_file():
+                        ext = file.suffix.lower()
+                        if ext in ['.mp4', '.webm', '.mkv', '.mp3', '.m4a', '.mov', '.avi', '.flv']:
+                            video_files.append((file, file.stat().st_mtime))
+                
+                downloaded_file = None
+                if video_files:
+                    video_files.sort(key=lambda x: x[1], reverse=True)
+                    downloaded_file = str(video_files[0][0])
+                
                 download_progress[download_id] = {
                     'status': 'completed',
                     'percent': '100%',
-                    'message': 'تم التحميل بنجاح!'
+                    'message': 'تم التحميل بنجاح!',
+                    'file': downloaded_file
                 }
                 return {'success': True}
             else:
@@ -1202,7 +1217,8 @@ class SmartMediaDownloader:
                         if '%' in part:
                             download_progress[download_id] = {
                                 'status': 'downloading',
-                                'percent': part
+                                'percent': part,
+                                'method': download_progress.get(download_id, {}).get('method', '')
                             }
                             break
             
