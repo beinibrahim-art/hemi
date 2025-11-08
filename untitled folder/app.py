@@ -2373,7 +2373,8 @@ def api_storage_info():
         folders = {
             'downloads': app.config['DOWNLOAD_FOLDER'],
             'outputs': app.config['OUTPUT_FOLDER'],
-            'subtitles': app.config['SUBTITLE_FOLDER']
+            'subtitles': app.config['SUBTITLE_FOLDER'],
+            'uploads': app.config['UPLOAD_FOLDER']
         }
         
         info = {}
@@ -2381,7 +2382,7 @@ def api_storage_info():
             folder_path = Path(folder)
             if folder_path.exists():
                 total_size = sum(f.stat().st_size for f in folder_path.rglob('*') if f.is_file())
-                file_count = len(list(folder_path.rglob('*')))
+                file_count = len([f for f in folder_path.rglob('*') if f.is_file()])
                 info[name] = {
                     'size': total_size,
                     'size_mb': round(total_size / (1024 * 1024), 2),
@@ -2392,6 +2393,81 @@ def api_storage_info():
         
         return jsonify({'success': True, 'folders': info})
     except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/cleanup', methods=['POST'])
+def api_cleanup():
+    """تنظيف الملفات المؤقتة والقديمة"""
+    try:
+        data = request.json or {}
+        cleanup_type = data.get('type', 'all')  # all, temp, old
+        
+        folders_to_clean = []
+        if cleanup_type == 'all':
+            folders_to_clean = [
+                app.config['DOWNLOAD_FOLDER'],
+                app.config['OUTPUT_FOLDER'],
+                app.config['SUBTITLE_FOLDER'],
+                app.config['UPLOAD_FOLDER']
+            ]
+        elif cleanup_type == 'temp':
+            folders_to_clean = [app.config['UPLOAD_FOLDER']]
+        elif cleanup_type == 'old':
+            # حذف الملفات الأقدم من 7 أيام
+            folders_to_clean = [
+                app.config['DOWNLOAD_FOLDER'],
+                app.config['OUTPUT_FOLDER'],
+                app.config['SUBTITLE_FOLDER']
+            ]
+        
+        deleted_count = 0
+        deleted_size = 0
+        current_time = time.time()
+        days_old = 7  # حذف الملفات الأقدم من 7 أيام
+        
+        for folder_path in folders_to_clean:
+            folder = Path(folder_path)
+            if not folder.exists():
+                continue
+            
+            for file_path in folder.rglob('*'):
+                if file_path.is_file():
+                    try:
+                        # حذف الملفات المؤقتة أو القديمة
+                        should_delete = False
+                        
+                        if cleanup_type == 'temp':
+                            # حذف الملفات المؤقتة فقط
+                            should_delete = file_path.name.startswith('temp_')
+                        elif cleanup_type == 'old':
+                            # حذف الملفات الأقدم من 7 أيام
+                            file_age = current_time - file_path.stat().st_mtime
+                            should_delete = file_age > (days_old * 24 * 3600)
+                        else:
+                            # حذف جميع الملفات
+                            should_delete = True
+                        
+                        if should_delete:
+                            file_size = file_path.stat().st_size
+                            file_path.unlink()
+                            deleted_count += 1
+                            deleted_size += file_size
+                    except Exception as e:
+                        logger.warning(f"Failed to delete {file_path}: {e}")
+                        continue
+        
+        return jsonify({
+            'success': True,
+            'deleted_count': deleted_count,
+            'deleted_size': deleted_size,
+            'deleted_size_mb': round(deleted_size / (1024 * 1024), 2),
+            'message': f'تم حذف {deleted_count} ملف ({round(deleted_size / (1024 * 1024), 2)} MB)'
+        })
+    
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
