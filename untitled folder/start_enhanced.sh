@@ -118,7 +118,9 @@ if [ $FLASK_CHECK -ne 0 ]; then
     
     # Basic libraries
     echo -e "${CYAN}  ⏳ المكتبات الأساسية...${NC}"
-    pip install "requests==2.31.0" "beautifulsoup4==4.12.2" "lxml==4.9.3" "tqdm==4.66.1" "jsonschema==4.19.0" -q
+    pip install "requests==2.31.0" "beautifulsoup4==4.12.2" "tqdm==4.66.1" "jsonschema==4.19.0" -q
+    # محاولة تثبيت lxml (قد يفشل على macOS)
+    pip install "lxml==4.9.3" -q 2>/dev/null || echo -e "${YELLOW}  ⚠️ lxml - اختياري${NC}"
     echo -e "${GREEN}  ✅ المكتبات الأساسية${NC}"
     
     # NumPy and Pillow
