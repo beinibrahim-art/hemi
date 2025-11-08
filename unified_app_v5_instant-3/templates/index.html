@@ -610,8 +610,103 @@
         <!-- Tab Contents -->
         <div class="tab-content" id="mainTabContent">
             
+            <!-- Instant Translation Tab -->
+            <div class="tab-pane fade show active" id="instant" role="tabpanel">
+                <div class="card-custom">
+                    <div class="text-center mb-4" style="padding: 30px; background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(239, 68, 68, 0.1)); border-radius: 20px;">
+                        <h2 style="background: linear-gradient(135deg, #f59e0b, #ef4444); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+                            <i class="bi bi-magic"></i> الترجمة الذكية بضغطة واحدة
+                        </h2>
+                        <p class="lead mt-3">حمّل الفيديو ← استخرج الصوت ← حوّل لنص ← ترجم للعربية ← ادمج مع الفيديو</p>
+                        <p style="color: #fbbf24;">كل هذا تلقائياً بضغطة زر واحدة! 🚀</p>
+                        <p class="mt-3" style="color: rgba(255,255,255,0.7);">فقط الصق الرابط واضغط الزر - سنقوم بتحميل الفيديو، استخراج الصوت، تحويله لنص، ترجمته للعربية، ودمجه مع الفيديو تلقائياً!</p>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-lg-8 mx-auto">
+                            <!-- Step 1: URL Input -->
+                            <div class="mb-4">
+                                <label class="form-label"><i class="bi bi-link-45deg"></i> رابط الفيديو:</label>
+                                <div class="input-group">
+                                    <input type="text" class="form-control form-control-lg" id="instantUrl" 
+                                           placeholder="الصق رابط من YouTube, TikTok, Instagram, Twitter, Facebook..."
+                                           style="font-size: 1.1rem;">
+                                </div>
+                            </div>
+
+                            <!-- Quick Settings -->
+                            <div class="row mb-4">
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label">جودة الفيديو:</label>
+                                    <select class="form-select" id="instantVideoQuality">
+                                        <option value="best">أفضل جودة</option>
+                                        <option value="720p" selected>720p (متوازن)</option>
+                                        <option value="480p">480p (سريع)</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label">نموذج Whisper:</label>
+                                    <select class="form-select" id="instantWhisperModel">
+                                        <option value="tiny">Tiny (سريع جداً)</option>
+                                        <option value="base" selected>Base (متوازن)</option>
+                                        <option value="small">Small (دقة أفضل)</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label">لغة المصدر:</label>
+                                    <select class="form-select" id="instantSourceLang">
+                                        <option value="auto" selected>كشف تلقائي</option>
+                                        <option value="en">English</option>
+                                        <option value="es">Español</option>
+                                        <option value="fr">Français</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Start Button -->
+                            <div class="text-center mt-4">
+                                <button class="btn btn-gradient btn-lg" onclick="startInstantTranslation()" 
+                                        id="instantStartBtn" style="min-width: 300px; font-size: 1.2rem; padding: 15px 30px;">
+                                    <i class="bi bi-magic"></i> ابدأ الترجمة الفورية
+                                </button>
+                            </div>
+
+                            <!-- Progress Steps -->
+                            <div id="instantProgress" style="display: none;">
+                                <div class="progress mb-3" style="height: 30px;">
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                         id="instantProgressBar" role="progressbar" style="width: 0%">0%</div>
+                                </div>
+                                <div class="text-center">
+                                    <span id="instantStatusText">جاري التحضير...</span>
+                                </div>
+                            </div>
+
+                            <!-- Results -->
+                            <div class="result-container mt-4" id="instantResult" style="display: none;">
+                                <div class="result-card">
+                                    <h4 class="text-success"><i class="bi bi-check-circle-fill"></i> تمت الترجمة بنجاح!</h4>
+                                    <div class="mt-3">
+                                        <a href="#" id="instantDownloadLink" class="btn btn-success btn-lg">
+                                            <i class="bi bi-download"></i> تحميل الفيديو المترجم
+                                        </a>
+                                        <button class="btn btn-outline-light ms-2" onclick="resetInstant()">
+                                            <i class="bi bi-arrow-clockwise"></i> ترجمة فيديو آخر
+                                        </button>
+                                    </div>
+                                    <div class="mt-3" id="instantTranscript" style="display: none;">
+                                        <label>النص المترجم:</label>
+                                        <textarea class="form-control" rows="5" readonly id="instantTranscriptText"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
             <!-- Download Tab -->
-            <div class="tab-pane fade show active" id="download" role="tabpanel">
+            <div class="tab-pane fade" id="download" role="tabpanel">
                 <div class="card-custom">
                     <h3 class="mb-4"><i class="bi bi-cloud-download"></i> تحميل من المنصات</h3>
                     
@@ -1103,6 +1198,143 @@
                 updatePreview();
             });
         });
+
+        // === INSTANT TRANSLATION FUNCTIONS ===
+        async function startInstantTranslation() {
+            const url = document.getElementById('instantUrl').value.trim();
+            
+            if (!url) {
+                showAlert('يرجى إدخال رابط الفيديو', 'warning');
+                return;
+            }
+
+            // Disable button and show progress
+            document.getElementById('instantStartBtn').disabled = true;
+            document.getElementById('instantProgress').style.display = 'block';
+            document.getElementById('instantResult').style.display = 'none';
+            updateInstantProgress(0, 'جاري التحميل...');
+
+            try {
+                // Step 1: Download video
+                const downloadResponse = await axios.post('/api/instant-translate', {
+                    url: url,
+                    step: 'download',
+                    quality: document.getElementById('instantVideoQuality').value
+                });
+
+                if (!downloadResponse.data.success) {
+                    throw new Error(downloadResponse.data.message);
+                }
+
+                updateInstantProgress(20, 'جاري استخراج الصوت...');
+
+                // Step 2: Extract audio
+                const audioResponse = await axios.post('/api/instant-translate', {
+                    video_file: downloadResponse.data.file,
+                    step: 'extract_audio'
+                });
+
+                if (!audioResponse.data.success) {
+                    throw new Error(audioResponse.data.message);
+                }
+
+                updateInstantProgress(40, 'جاري تحويل الصوت إلى نص...');
+
+                // Step 3: Transcribe
+                const transcribeResponse = await axios.post('/api/instant-translate', {
+                    audio_file: audioResponse.data.audio_file,
+                    step: 'transcribe',
+                    model: document.getElementById('instantWhisperModel').value,
+                    language: document.getElementById('instantSourceLang').value
+                });
+
+                if (!transcribeResponse.data.success) {
+                    throw new Error(transcribeResponse.data.message);
+                }
+
+                updateInstantProgress(60, 'جاري الترجمة إلى العربية...');
+
+                // Step 4: Translate
+                const translateResponse = await axios.post('/api/instant-translate', {
+                    text: transcribeResponse.data.text,
+                    step: 'translate',
+                    source_lang: transcribeResponse.data.language || 'auto',
+                    target_lang: 'ar'
+                });
+
+                if (!translateResponse.data.success) {
+                    throw new Error(translateResponse.data.message);
+                }
+
+                updateInstantProgress(80, 'جاري دمج الترجمة مع الفيديو...');
+
+                // Step 5: Merge
+                const mergeResponse = await axios.post('/api/instant-translate', {
+                    video_file: downloadResponse.data.file,
+                    subtitle_text: translateResponse.data.translated_text,
+                    step: 'merge',
+                    quality: 'original',
+                    settings: {
+                        font_size: 22,
+                        font_color: '#FFFFFF',
+                        bg_color: '#000000',
+                        bg_opacity: 180,
+                        position: 'bottom',
+                        font_name: 'Arial'
+                    }
+                });
+
+                if (!mergeResponse.data.success) {
+                    throw new Error(mergeResponse.data.message);
+                }
+
+                updateInstantProgress(100, 'اكتملت الترجمة!');
+
+                // Show result
+                document.getElementById('instantDownloadLink').href = mergeResponse.data.download_url;
+                document.getElementById('instantTranscriptText').value = translateResponse.data.translated_text;
+                document.getElementById('instantTranscript').style.display = 'block';
+                document.getElementById('instantResult').style.display = 'block';
+
+                showAlert('تمت الترجمة الفورية بنجاح! 🎉', 'success');
+
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert(error.message || 'حدث خطأ أثناء المعالجة', 'danger');
+                resetInstantSteps();
+            }
+
+            // Re-enable button
+            document.getElementById('instantStartBtn').disabled = false;
+        }
+
+        function updateInstantProgress(percentage, message) {
+            const progressBar = document.getElementById('instantProgressBar');
+            const statusText = document.getElementById('instantStatusText');
+            
+            if (progressBar) {
+                progressBar.style.width = percentage + '%';
+                progressBar.textContent = Math.round(percentage) + '%';
+            }
+            
+            if (statusText && message) {
+                statusText.textContent = message;
+            }
+        }
+
+        function resetInstantSteps() {
+            document.getElementById('instantProgress').style.display = 'none';
+            document.getElementById('instantProgressBar').style.width = '0%';
+            document.getElementById('instantStatusText').textContent = 'جاري التحضير...';
+        }
+
+        function resetInstant() {
+            document.getElementById('instantUrl').value = '';
+            document.getElementById('instantProgress').style.display = 'none';
+            document.getElementById('instantResult').style.display = 'none';
+            document.getElementById('instantTranscript').style.display = 'none';
+            resetInstantSteps();
+        }
 
         // === DOWNLOAD FUNCTIONS ===
         async function checkQualities() {
