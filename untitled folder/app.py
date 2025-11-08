@@ -1204,13 +1204,53 @@ def api_instant_translate():
         
         elif step == 'merge':
             video_file = data.get('video_file')
-            subtitle_text = data.get('subtitle_text')
+            # دعم كلا الاسمين: subtitle_text و translated_text
+            subtitle_text = data.get('subtitle_text') or data.get('translated_text')
+            
+            # قراءة من الملف المؤقت إذا لزم الأمر
+            if not video_file and data.get('temp_video_file'):
+                temp_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_video_file']
+                if temp_path.exists():
+                    with open(temp_path, 'r') as f:
+                        video_file = f.read().strip()
+            
+            if not subtitle_text and data.get('temp_translated_file'):
+                temp_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_translated_file']
+                if temp_path.exists():
+                    with open(temp_path, 'r', encoding='utf-8') as f:
+                        subtitle_text = f.read().strip()
             
             if not video_file or not subtitle_text:
+                logger.error(f"Merge error: video_file={video_file}, subtitle_text={'exists' if subtitle_text else 'missing'}")
                 return jsonify({
                     'success': False,
-                    'message': 'ملف الفيديو أو النص غير موجود'
+                    'message': 'ملف الفيديو أو النص غير موجود',
+                    'debug': {
+                        'has_video_file': bool(video_file),
+                        'has_subtitle_text': bool(subtitle_text),
+                        'video_file': video_file if video_file else None
+                    }
                 }), 400
+            
+            # التأكد من أن ملف الفيديو موجود
+            if not os.path.exists(video_file):
+                # البحث في مجلد التحميل
+                download_folder = Path(app.config['DOWNLOAD_FOLDER'])
+                basename = os.path.basename(video_file)
+                possible_paths = [
+                    download_folder / basename,
+                    Path(video_file)
+                ]
+                
+                for path in possible_paths:
+                    if path.exists():
+                        video_file = str(path)
+                        break
+                else:
+                    return jsonify({
+                        'success': False,
+                        'message': f'ملف الفيديو غير موجود: {video_file}'
+                    }), 400
             
             settings = {
                 'fontSize': data.get('fontSize', data.get('font_size', 24)),
@@ -1221,6 +1261,73 @@ def api_instant_translate():
                 'fontFamily': data.get('fontFamily', data.get('font_name', 'Arial'))
             }
             
+            # إنشاء SRT من النص المترجم
+            # إذا كان النص ليس بصيغة SRT، نحوله إلى SRT
+            if not subtitle_text.strip().startswith('1\n') and not subtitle_text.strip().startswith('WEBVTT'):
+                # محاولة استخدام segments من transcript إذا كانت متوفرة
+                transcript_data = None
+                if data.get('temp_transcript_file'):
+                    temp_transcript_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_transcript_file']
+                    if temp_transcript_path.exists():
+                        try:
+                            with open(temp_transcript_path, 'r', encoding='utf-8') as f:
+                                transcript_data = json.load(f)
+                        except:
+                            pass
+                
+                if transcript_data and transcript_data.get('segments'):
+                    # استخدام segments من Whisper مع النص المترجم
+                    segments = transcript_data['segments']
+                    translated_segments = subtitle_text.split('\n')
+                    
+                    srt_lines = []
+                    for i, seg in enumerate(segments):
+                        if i < len(translated_segments) and translated_segments[i].strip():
+                            start_str = SubtitleProcessor._format_time(seg.get('start', i * 3))
+                            end_str = SubtitleProcessor._format_time(seg.get('end', (i + 1) * 3))
+                            
+                            srt_lines.append(f"{i + 1}")
+                            srt_lines.append(f"{start_str} --> {end_str}")
+                            srt_lines.append(translated_segments[i].strip())
+                            srt_lines.append("")
+                    
+                    if srt_lines:
+                        subtitle_text = '\n'.join(srt_lines)
+                    else:
+                        # Fallback: تحويل النص العادي إلى SRT بسيط
+                        segments = subtitle_text.split('\n')
+                        srt_lines = []
+                        for i, line in enumerate(segments, 1):
+                            if line.strip():
+                                start_time = (i - 1) * 3
+                                end_time = i * 3
+                                start_str = SubtitleProcessor._format_time(start_time)
+                                end_str = SubtitleProcessor._format_time(end_time)
+                                
+                                srt_lines.append(f"{i}")
+                                srt_lines.append(f"{start_str} --> {end_str}")
+                                srt_lines.append(line.strip())
+                                srt_lines.append("")
+                        
+                        subtitle_text = '\n'.join(srt_lines)
+                else:
+                    # Fallback: تحويل النص العادي إلى SRT بسيط
+                    segments = subtitle_text.split('\n')
+                    srt_lines = []
+                    for i, line in enumerate(segments, 1):
+                        if line.strip():
+                            start_time = (i - 1) * 3
+                            end_time = i * 3
+                            start_str = SubtitleProcessor._format_time(start_time)
+                            end_str = SubtitleProcessor._format_time(end_time)
+                            
+                            srt_lines.append(f"{i}")
+                            srt_lines.append(f"{start_str} --> {end_str}")
+                            srt_lines.append(line.strip())
+                            srt_lines.append("")
+                    
+                    subtitle_text = '\n'.join(srt_lines)
+            
             # إنشاء SRT
             srt_path = Path(app.config['SUBTITLE_FOLDER']) / f"subtitle_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
             with open(srt_path, 'w', encoding='utf-8') as f:
@@ -1229,6 +1336,8 @@ def api_instant_translate():
             # دمج
             output_file = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
             output_path = Path(app.config['OUTPUT_FOLDER']) / output_file
+            
+            logger.info(f"Merging subtitles: video={video_file}, srt={srt_path}, output={output_path}")
             
             success = VideoProcessor.merge_subtitles(str(video_file), str(srt_path), str(output_path), settings)
             
@@ -1467,6 +1576,132 @@ def api_storage_info():
         
         return jsonify({'success': True, 'folders': info})
     except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/get-video-thumbnail', methods=['POST'])
+def api_get_video_thumbnail():
+    """استخراج صورة مصغرة من الفيديو"""
+    try:
+        data = request.json
+        video_file = data.get('video_file')
+        
+        if not video_file:
+            return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
+        
+        # البحث عن الملف
+        if not os.path.exists(video_file):
+            download_folder = Path(app.config['DOWNLOAD_FOLDER'])
+            basename = os.path.basename(video_file)
+            possible_paths = [
+                download_folder / basename,
+                Path(video_file)
+            ]
+            
+            for path in possible_paths:
+                if path.exists():
+                    video_file = str(path)
+                    break
+            else:
+                return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 404
+        
+        # استخراج صورة مصغرة باستخدام ffmpeg
+        thumbnail_path = Path(app.config['OUTPUT_FOLDER']) / f"thumb_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        
+        cmd = [
+            'ffmpeg',
+            '-i', video_file,
+            '-ss', '00:00:01',
+            '-vframes', '1',
+            '-q:v', '2',
+            '-y',
+            str(thumbnail_path)
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, timeout=10)
+        
+        if result.returncode == 0 and thumbnail_path.exists():
+            return jsonify({
+                'success': True,
+                'thumbnail_url': f'/download/{thumbnail_path.name}'
+            })
+        else:
+            # إذا فشل، استخدم صورة افتراضية
+            return jsonify({
+                'success': False,
+                'message': 'فشل استخراج الصورة المصغرة'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Thumbnail error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/merge-subtitle', methods=['POST'])
+def api_merge_subtitle():
+    """دمج الترجمة مع الفيديو (من تبويب محرر الترجمة)"""
+    try:
+        video_file = request.files.get('video')
+        subtitle_file = request.files.get('subtitle')
+        
+        if not video_file or not subtitle_file:
+            return jsonify({
+                'success': False,
+                'message': 'يرجى رفع الفيديو وملف الترجمة'
+            }), 400
+        
+        # حفظ الملفات
+        video_filename = secure_filename(video_file.filename)
+        subtitle_filename = secure_filename(subtitle_file.filename)
+        
+        temp_video_path = Path(app.config['UPLOAD_FOLDER']) / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{video_filename}"
+        temp_subtitle_path = Path(app.config['UPLOAD_FOLDER']) / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{subtitle_filename}"
+        
+        video_file.save(str(temp_video_path))
+        subtitle_file.save(str(temp_subtitle_path))
+        
+        # قراءة إعدادات الترجمة
+        settings = {
+            'fontSize': int(request.form.get('fontSize', request.form.get('font_size', 24))),
+            'fontColor': request.form.get('fontColor', request.form.get('font_color', '#FFFFFF')),
+            'bgColor': request.form.get('bgColor', request.form.get('bg_color', '#000000')),
+            'bgOpacity': int(request.form.get('bgOpacity', request.form.get('bg_opacity', 180))),
+            'position': request.form.get('position', 'bottom'),
+            'fontFamily': request.form.get('fontFamily', request.form.get('font_name', 'Arial'))
+        }
+        
+        # دمج
+        output_file = f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        output_path = Path(app.config['OUTPUT_FOLDER']) / output_file
+        
+        success = VideoProcessor.merge_subtitles(
+            str(temp_video_path),
+            str(temp_subtitle_path),
+            str(output_path),
+            settings
+        )
+        
+        # حذف الملفات المؤقتة
+        try:
+            temp_video_path.unlink()
+            temp_subtitle_path.unlink()
+        except:
+            pass
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'download_url': f'/download/{output_file}'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'فشل دمج الترجمة'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Merge subtitle error: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
