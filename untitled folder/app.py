@@ -2060,13 +2060,14 @@ def api_instant_translate():
                         'download_id': download_id
                     })
                 else:
-                    # التحميل ما زال قيد التنفيذ
+                    # التحميل ما زال قيد التنفيذ - إرجاع download_id للانتظار
                     return jsonify({
                         'success': True,
                         'download_id': download_id,
                         'status': 'downloading',
-                        'message': 'جاري التحميل...',
-                        'check_progress': f'/api/media/progress/{download_id}'
+                        'message': 'جاري التحميل... يرجى الانتظار ثم المحاولة مرة أخرى',
+                        'check_progress': f'/api/media/progress/{download_id}',
+                        'wait': True  # علامة للواجهة للانتظار
                     })
             else:
                 error_message = result.get('message', 'حدث خطأ غير معروف أثناء التحميل')
@@ -2078,6 +2079,28 @@ def api_instant_translate():
         
         elif step == 'extract_audio':
             video_file = data.get('video_file')
+            download_id = data.get('download_id')  # دعم download_id من النظام الموحد
+            
+            # إذا كان هناك download_id، احصل على الملف من التقدم
+            if download_id and not video_file:
+                progress = unified_downloader.get_progress(download_id)
+                if progress.get('status') == 'completed' and progress.get('file'):
+                    file_info = progress.get('file')
+                    if isinstance(file_info, dict):
+                        video_file = file_info.get('video', file_info.get('file'))
+                    else:
+                        video_file = file_info
+                else:
+                    # الانتظار قليلاً ثم المحاولة مرة أخرى
+                    import time
+                    time.sleep(2)
+                    progress = unified_downloader.get_progress(download_id)
+                    if progress.get('status') == 'completed' and progress.get('file'):
+                        file_info = progress.get('file')
+                        if isinstance(file_info, dict):
+                            video_file = file_info.get('video', file_info.get('file'))
+                        else:
+                            video_file = file_info
             
             # قراءة من الملف المؤقت إذا لزم الأمر
             if not video_file and data.get('temp_video_file'):
@@ -2101,7 +2124,17 @@ def api_instant_translate():
                         break
             
             if not video_file or not os.path.exists(video_file):
-                return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
+                logger.error(f"Video file not found. video_file: {video_file}, download_id: {download_id}, temp_file: {data.get('temp_video_file')}")
+                return jsonify({
+                    'success': False, 
+                    'message': 'ملف الفيديو غير موجود',
+                    'debug': {
+                        'video_file': video_file,
+                        'download_id': download_id,
+                        'temp_video_file': data.get('temp_video_file'),
+                        'has_download_id': bool(download_id)
+                    }
+                }), 400
             
             audio_file = video_file.rsplit('.', 1)[0] + '_audio.wav'
             

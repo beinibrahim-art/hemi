@@ -1504,12 +1504,54 @@
                     throw new Error(downloadResponse.data.message || 'فشل التحميل');
                 }
 
+                // إذا كان هناك download_id، انتظر حتى يكتمل التحميل
+                let videoFile = downloadResponse.data.file;
+                let downloadId = downloadResponse.data.download_id;
+                
+                if (downloadId && !videoFile) {
+                    // الانتظار حتى يكتمل التحميل
+                    updateInstantProgress(10, 'جاري التحميل...');
+                    let attempts = 0;
+                    const maxAttempts = 60; // 60 ثانية كحد أقصى
+                    
+                    while (attempts < maxAttempts) {
+                        await new Promise(resolve => setTimeout(resolve, 1000)); // انتظار ثانية واحدة
+                        attempts++;
+                        
+                        try {
+                            const progressResponse = await axios.get(`/api/media/progress/${downloadId}`);
+                            const progress = progressResponse.data;
+                            
+                            if (progress.status === 'completed' && progress.file) {
+                                videoFile = progress.file;
+                                if (typeof videoFile === 'object') {
+                                    videoFile = videoFile.video || videoFile.file;
+                                }
+                                break;
+                            } else if (progress.status === 'error') {
+                                throw new Error(progress.message || 'فشل التحميل');
+                            } else {
+                                const percent = progress.percent || '0%';
+                                updateInstantProgress(10 + (attempts * 0.5), `جاري التحميل... ${percent}`);
+                            }
+                        } catch (error) {
+                            console.error('Progress check error:', error);
+                        }
+                    }
+                    
+                    if (!videoFile) {
+                        throw new Error('انتهت مهلة التحميل');
+                    }
+                }
+
                 window.tempVideoFile = downloadResponse.data.temp_file;
+                window.downloadId = downloadId; // حفظ download_id للاستخدام لاحقاً
                 updateInstantProgress(20, 'جاري استخراج الصوت...');
 
                 const audioResponse = await axios.post('/api/instant-translate', {
-                    video_file: downloadResponse.data.file,
+                    video_file: videoFile,
                     temp_video_file: window.tempVideoFile,
+                    download_id: downloadId, // إرسال download_id أيضاً
                     step: 'extract_audio'
                 });
 
@@ -1549,7 +1591,7 @@
 
                 window.tempTranslatedFile = translateResponse.data.temp_file;
                 window.instantTranslatedText = translateResponse.data.translated_text;
-                window.instantVideoFile = downloadResponse.data.file;
+                window.instantVideoFile = videoFile || downloadResponse.data.file;
                 
                 updateInstantProgress(70, 'جاري تحضير المعاينة...');
                 
@@ -1561,8 +1603,8 @@
                 if (transcriptText) transcriptText.value = translateResponse.data.translated_text;
                 if (transcriptDiv) transcriptDiv.classList.remove('hidden');
                 
-                if (downloadResponse.data.file && typeof loadInstantVideoPreview === 'function') {
-                    await loadInstantVideoPreview(downloadResponse.data.file);
+                if (videoFile && typeof loadInstantVideoPreview === 'function') {
+                    await loadInstantVideoPreview(videoFile);
                 }
                 
                 if (typeof updateInstantPreview === 'function') {
@@ -1575,19 +1617,19 @@
                 exportBtn.className = 'btn-primary-glass px-6 py-3 rounded-xl font-semibold mt-3';
                 exportBtn.id = 'instantExportBtn';
                 exportBtn.innerHTML = '<i class="bi bi-download"></i> تصدير النهائي';
-                exportBtn.onclick = async () => {
-                    exportBtn.disabled = true;
-                    if (typeof finalizeInstantTranslation === 'function') {
-                        await finalizeInstantTranslation(
-                            downloadResponse.data.file, 
-                            translateResponse.data.translated_text,
-                            window.tempVideoFile,
-                            window.tempAudioFile,
-                            window.tempTranscriptFile,
-                            window.tempTranslatedFile
-                        );
-                    }
-                };
+                    exportBtn.onclick = async () => {
+                        exportBtn.disabled = true;
+                        if (typeof finalizeInstantTranslation === 'function') {
+                            await finalizeInstantTranslation(
+                                videoFile || downloadResponse.data.file, 
+                                translateResponse.data.translated_text,
+                                window.tempVideoFile,
+                                window.tempAudioFile,
+                                window.tempTranscriptFile,
+                                window.tempTranslatedFile
+                            );
+                        }
+                    };
                 const startBtnParent = startBtn?.parentElement;
                 if (startBtnParent) {
                     startBtnParent.appendChild(exportBtn);
