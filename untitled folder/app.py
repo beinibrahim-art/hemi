@@ -254,166 +254,335 @@ class SmartMediaDownloader:
             return 'unknown'
     
     def get_available_formats(self, url: str) -> dict:
-        """الحصول على جميع التنسيقات المتاحة للفيديو"""
+        """
+        الحصول على جميع التنسيقات المتاحة للفيديو باستخدام JSON
+        هذه النسخة المحسّنة تكتشف 4K/8K وجميع الجودات بدقة
+        """
         try:
-            # استخدام -F فقط للحصول على قائمة التنسيقات (أبسط وأكثر موثوقية)
-            cmd = ['yt-dlp', '-F', '--no-warnings', url]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            # استخدام JSON API من yt-dlp (أدق وأسرع)
+            cmd = [
+                'yt-dlp',
+                '--dump-json',
+                '--no-warnings',
+                '--skip-download',
+                url
+            ]
+            
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                timeout=60
+            )
             
             if result.returncode != 0:
                 return {'success': False, 'error': 'Could not fetch formats'}
             
-            formats = self._parse_formats(result.stdout)
-            info = self._get_video_info(url)
+            # تحليل JSON
+            video_info = json.loads(result.stdout)
+            
+            # استخراج التنسيقات بذكاء
+            formats = self._parse_formats_from_json(video_info)
+            
+            # إنشاء presets ذكية
+            presets = self._create_smart_presets_from_json(formats, video_info)
+            
+            # معلومات الفيديو
+            info = {
+                'title': video_info.get('title', 'Unknown'),
+                'uploader': video_info.get('uploader', 'Unknown'),
+                'duration': video_info.get('duration', 0),
+                'thumbnail': video_info.get('thumbnail', ''),
+                'description': video_info.get('description', '')[:200],
+                'view_count': video_info.get('view_count', 0),
+                'like_count': video_info.get('like_count', 0)
+            }
             
             return {
                 'success': True,
                 'formats': formats,
+                'presets': presets,
                 'info': info,
                 'platform': self.detect_platform(url)
             }
             
         except subprocess.TimeoutExpired:
             return {'success': False, 'error': 'Request timeout'}
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parse error: {e}")
+            return {'success': False, 'error': 'Failed to parse video info'}
         except Exception as e:
+            logger.error(f"Error fetching formats: {e}")
             return {'success': False, 'error': str(e)}
     
-    def _parse_formats(self, output: str) -> dict:
-        """تحليل مخرجات yt-dlp format - نسخة بسيطة وموثوقة"""
+    def _parse_formats_from_json(self, video_info: Dict) -> Dict:
+        """
+        تحليل التنسيقات من JSON - نسخة محسّنة ودقيقة
+        تكتشف 8K, 4K, 1440p, 1080p, 720p, 480p, 360p تلقائياً
+        """
         formats = {
-            'video_audio': [],
-            'video_only': [],
-            'audio_only': [],
-            'best': None
+            'video_audio': [],    # فيديو + صوت
+            'video_only': [],     # فيديو فقط
+            'audio_only': [],     # صوت فقط
+            'all_heights': set(), # جميع الارتفاعات المتاحة
+            'max_height': 0,      # أعلى جودة متاحة
+            'by_height': {}       # تصنيف حسب الارتفاع
         }
         
-        lines = output.split('\n')
+        raw_formats = video_info.get('formats', [])
         
-        for line in lines:
-            if not line.strip() or 'format code' in line.lower():
-                continue
-            
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            
-            format_id = parts[0]
-            quality_match = re.search(r'(\d+)x(\d+)', line)
-            resolution = None
-            
-            if quality_match:
-                width, height = quality_match.groups()
-                resolution = f"{height}p"
+        for fmt in raw_formats:
+            format_id = fmt.get('format_id', '')
+            ext = fmt.get('ext', '')
+            height = fmt.get('height')
+            width = fmt.get('width')
+            fps = fmt.get('fps', 0)
+            vcodec = fmt.get('vcodec', 'none')
+            acodec = fmt.get('acodec', 'none')
+            filesize = fmt.get('filesize') or fmt.get('filesize_approx', 0)
+            tbr = fmt.get('tbr', 0)  # Total bitrate
+            vbr = fmt.get('vbr', 0)  # Video bitrate
+            abr = fmt.get('abr', 0)  # Audio bitrate
             
             format_info = {
                 'id': format_id,
-                'resolution': resolution,
-                'note': '',
-                'filesize': self._extract_filesize(line)
+                'ext': ext,
+                'height': height,
+                'width': width,
+                'fps': int(fps) if fps else None,
+                'vcodec': vcodec,
+                'acodec': acodec,
+                'filesize': filesize,
+                'filesize_mb': round(filesize / (1024 * 1024), 2) if filesize else None,
+                'tbr': round(tbr, 2) if tbr else None,
+                'vbr': round(vbr, 2) if vbr else None,
+                'abr': round(abr, 2) if abr else None,
+                'resolution': f"{height}p" if height else None,
+                'quality': fmt.get('quality', 0),
+                'format_note': fmt.get('format_note', ''),
+                'protocol': fmt.get('protocol', ''),
+                'container': fmt.get('container', ''),
+                'has_drm': fmt.get('has_drm', False)
             }
             
-            line_lower = line.lower()
-            
-            if 'audio only' in line_lower or 'm4a' in line_lower or 'mp3' in line_lower:
-                bitrate = re.search(r'(\d+)k', line)
-                if bitrate:
-                    format_info['bitrate'] = bitrate.group(1) + 'kbps'
-                format_info['note'] = 'Audio Only'
-                formats['audio_only'].append(format_info)
-                
-            elif 'video only' in line_lower:
-                if resolution:
-                    format_info['note'] = f'{resolution} (No Audio)'
-                    formats['video_only'].append(format_info)
-                    
-            elif resolution:
-                format_info['note'] = f'{resolution}'
+            # تصنيف التنسيق
+            if vcodec != 'none' and acodec != 'none':
+                # فيديو + صوت
+                format_info['type'] = 'video_audio'
+                format_info['note'] = f"{height}p" if height else 'Video+Audio'
                 formats['video_audio'].append(format_info)
+                
+                if height:
+                    formats['all_heights'].add(height)
+                    formats['max_height'] = max(formats['max_height'], height)
+                    
+                    # تصنيف حسب الارتفاع
+                    if height not in formats['by_height']:
+                        formats['by_height'][height] = []
+                    formats['by_height'][height].append(format_info)
+                    
+            elif vcodec != 'none' and acodec == 'none':
+                # فيديو فقط
+                format_info['type'] = 'video_only'
+                format_info['note'] = f"{height}p (No Audio)" if height else 'Video Only'
+                formats['video_only'].append(format_info)
+                
+                if height:
+                    formats['all_heights'].add(height)
+                    formats['max_height'] = max(formats['max_height'], height)
+                    
+                    if height not in formats['by_height']:
+                        formats['by_height'][height] = []
+                    formats['by_height'][height].append(format_info)
+                    
+            elif vcodec == 'none' and acodec != 'none':
+                # صوت فقط
+                format_info['type'] = 'audio_only'
+                format_info['bitrate'] = f"{int(abr)}kbps" if abr else 'Unknown'
+                format_info['note'] = f"Audio {int(abr)}kbps" if abr else 'Audio'
+                formats['audio_only'].append(format_info)
         
-        formats['presets'] = self._create_smart_presets(formats)
+        # تحويل set إلى list مرتب
+        formats['all_heights'] = sorted(list(formats['all_heights']), reverse=True)
+        
+        # ترتيب التنسيقات حسب الجودة
+        formats['video_audio'].sort(
+            key=lambda x: (
+                x['height'] or 0, 
+                x['fps'] or 0,
+                x['tbr'] or 0
+            ), 
+            reverse=True
+        )
+        
+        formats['video_only'].sort(
+            key=lambda x: (
+                x['height'] or 0,
+                x['fps'] or 0,
+                x['vbr'] or 0
+            ), 
+            reverse=True
+        )
+        
+        formats['audio_only'].sort(
+            key=lambda x: x['abr'] or 0, 
+            reverse=True
+        )
         
         return formats
     
-    def _create_smart_presets(self, formats: dict) -> list:
-        """إنشاء presets ذكية للتحميل - نسخة بسيطة وموثوقة"""
+    def _create_smart_presets_from_json(self, formats: Dict, video_info: Dict) -> List[Dict]:
+        """
+        إنشاء presets ذكية بناءً على التنسيقات المتاحة من JSON
+        يكتشف تلقائياً 8K, 4K, 1440p, 1080p, وجميع الجودات المتاحة
+        """
         presets = []
+        all_heights = formats.get('all_heights', [])
+        max_height = formats.get('max_height', 0)
+        by_height = formats.get('by_height', {})
+        
+        # 1. أفضل جودة (دائماً موجود)
+        best_description = f'أعلى جودة متاحة ({max_height}p)' if max_height else 'أعلى جودة متاحة'
+        
+        # إضافة معلومات عن أفضل تنسيق
+        if max_height and max_height in by_height:
+            best_formats = by_height[max_height]
+            if best_formats:
+                best_fmt = best_formats[0]
+                fps_info = f" @ {best_fmt['fps']}fps" if best_fmt.get('fps') else ""
+                size_info = f" • {best_fmt['filesize_mb']} MB" if best_fmt.get('filesize_mb') else ""
+                best_description = f"{max_height}p{fps_info}{size_info}"
         
         presets.append({
             'id': 'best',
-            'name': 'أفضل جودة',
-            'description': 'أعلى جودة متاحة (تلقائي)',
+            'name': '⭐ أفضل جودة',
+            'description': best_description,
             'icon': 'crown',
-            'command': 'bestvideo+bestaudio/best'
+            'command': 'bestvideo+bestaudio/best',
+            'height': max_height,
+            'priority': 100
         })
         
-        # التحقق من وجود 4K (2160p أو 4320p)
-        has_4k = any(f.get('resolution') in ['2160p', '4320p'] 
-                     for f in formats['video_audio'] + formats['video_only'])
-        if has_4k:
-            presets.append({
-                'id': '4k',
-                'name': '4K Ultra HD',
-                'description': '2160p - جودة فائقة',
+        # 2. كشف الجودات المتاحة بذكاء
+        quality_definitions = [
+            {
+                'height': 4320, 
+                'id': '8k', 
+                'name': '8K Ultra HD', 
+                'description': '4320p - جودة خيالية 🔥', 
                 'icon': 'sparkles',
-                'command': 'bestvideo[height<=2160]+bestaudio/best[height<=2160]'
-            })
-        
-        # التحقق من وجود 1440p
-        has_1440p = any(f.get('resolution') == '1440p' 
-                        for f in formats['video_audio'] + formats['video_only'])
-        if has_1440p:
-            presets.append({
-                'id': '1440p',
-                'name': '1440p QHD',
-                'description': 'جودة عالية جداً',
+                'emoji': '🎆'
+            },
+            {
+                'height': 2160, 
+                'id': '4k', 
+                'name': '4K Ultra HD', 
+                'description': '2160p - جودة فائقة', 
+                'icon': 'gem',
+                'emoji': '💎'
+            },
+            {
+                'height': 1440, 
+                'id': '1440p', 
+                'name': '1440p QHD', 
+                'description': 'جودة عالية جداً', 
                 'icon': 'star',
-                'command': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]'
-            })
-        
-        # التحقق من وجود 1080p
-        has_1080p = any(f.get('resolution') == '1080p' 
-                        for f in formats['video_audio'] + formats['video_only'])
-        if has_1080p:
-            presets.append({
-                'id': '1080p',
-                'name': '1080p Full HD',
-                'description': 'جودة ممتازة',
+                'emoji': '⭐'
+            },
+            {
+                'height': 1080, 
+                'id': '1080p', 
+                'name': '1080p Full HD', 
+                'description': 'جودة ممتازة', 
                 'icon': 'video',
-                'command': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]'
-            })
-        
-        # التحقق من وجود 720p
-        has_720p = any(f.get('resolution') == '720p' 
-                       for f in formats['video_audio'] + formats['video_only'])
-        if has_720p:
-            presets.append({
-                'id': '720p',
-                'name': '720p HD',
-                'description': 'جودة جيدة - حجم متوازن',
+                'emoji': '📺'
+            },
+            {
+                'height': 720, 
+                'id': '720p', 
+                'name': '720p HD', 
+                'description': 'جودة جيدة - حجم متوازن', 
                 'icon': 'film',
-                'command': 'bestvideo[height<=720]+bestaudio/best[height<=720]'
-            })
-        
-        # التحقق من وجود 480p
-        has_480p = any(f.get('resolution') == '480p' 
-                       for f in formats['video_audio'] + formats['video_only'])
-        if has_480p:
-            presets.append({
-                'id': '480p',
-                'name': '480p SD',
-                'description': 'جودة متوسطة - حجم صغير',
+                'emoji': '📹'
+            },
+            {
+                'height': 480, 
+                'id': '480p', 
+                'name': '480p SD', 
+                'description': 'جودة متوسطة - حجم صغير', 
                 'icon': 'smartphone',
-                'command': 'bestvideo[height<=480]+bestaudio/best[height<=480]'
-            })
+                'emoji': '📱'
+            },
+            {
+                'height': 360, 
+                'id': '360p', 
+                'name': '360p Low', 
+                'description': 'جودة منخفضة - سريع', 
+                'icon': 'phone',
+                'emoji': '📵'
+            }
+        ]
         
-        if formats['audio_only']:
+        for quality_def in quality_definitions:
+            height = quality_def['height']
+            
+            if height in all_heights:
+                # الحصول على معلومات إضافية عن هذه الجودة
+                additional_info = ""
+                if height in by_height and by_height[height]:
+                    best_of_height = by_height[height][0]
+                    
+                    # إضافة معلومات FPS
+                    if best_of_height.get('fps'):
+                        additional_info += f" @ {best_of_height['fps']}fps"
+                    
+                    # إضافة معلومات الحجم
+                    if best_of_height.get('filesize_mb'):
+                        additional_info += f" • ~{best_of_height['filesize_mb']} MB"
+                    
+                    # إضافة معلومات البت ريت
+                    if best_of_height.get('tbr'):
+                        additional_info += f" • {best_of_height['tbr']} kbps"
+                
+                description = quality_def['description']
+                if additional_info:
+                    description += additional_info
+                
+                presets.append({
+                    'id': quality_def['id'],
+                    'name': f"{quality_def['emoji']} {quality_def['name']}",
+                    'description': description,
+                    'icon': quality_def['icon'],
+                    'command': f"bestvideo[height<={height}]+bestaudio/best[height<={height}]",
+                    'height': height,
+                    'priority': 90 - (len(presets) * 5)
+                })
+        
+        # 3. صوت فقط (دائماً متاح)
+        if formats.get('audio_only'):
+            best_audio = formats['audio_only'][0]
+            bitrate = best_audio.get('bitrate', 'Unknown')
+            filesize_mb = best_audio.get('filesize_mb')
+            
+            audio_description = f'MP3 بأفضل جودة'
+            if bitrate != 'Unknown':
+                audio_description += f' ({bitrate})'
+            if filesize_mb:
+                audio_description += f' • ~{filesize_mb} MB'
+            
             presets.append({
                 'id': 'audio',
-                'name': 'صوت فقط',
-                'description': 'MP3 بأفضل جودة',
+                'name': '🎵 صوت فقط',
+                'description': audio_description,
                 'icon': 'music',
-                'command': 'audio'
+                'command': 'bestaudio/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
+                'priority': 50
             })
+        
+        # ترتيب حسب الأولوية
+        presets.sort(key=lambda x: x.get('priority', 0), reverse=True)
+        
+        logger.info(f"Created {len(presets)} smart presets. Heights available: {all_heights}")
         
         return presets
     
@@ -424,7 +593,9 @@ class SmartMediaDownloader:
         return 'Unknown'
     
     def _get_video_info(self, url: str) -> dict:
-        """الحصول على معلومات الفيديو"""
+        """الحصول على معلومات الفيديو - محتفظ بها للتوافق"""
+        # هذه الدالة لم تعد مستخدمة في get_available_formats الجديدة
+        # لكن محتفظ بها للتوافق مع الكود القديم
         try:
             cmd = ['yt-dlp', '--dump-json', '--no-warnings', '--skip-download', url]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -2698,21 +2869,33 @@ def api_get_qualities():
         
         if result.get('success'):
             formats_data = result.get('formats', {})
+            presets = result.get('presets', [])
             
-            # إضافة معلومات إضافية للتصحيح
+            # إضافة معلومات للتصحيح
             debug_info = {
                 'max_height': formats_data.get('max_height', 0),
                 'all_heights': formats_data.get('all_heights', []),
                 'video_formats_count': len(formats_data.get('video_audio', [])),
-                'video_only_count': len(formats_data.get('video_only', []))
+                'video_only_count': len(formats_data.get('video_only', [])),
+                'audio_count': len(formats_data.get('audio_only', [])),
+                'presets_count': len(presets)
             }
+            
+            logger.info(f"Formats found: {debug_info}")
             
             return jsonify({
                 'success': True,
-                'formats': formats_data,
+                'formats': {
+                    'video_audio': formats_data.get('video_audio', [])[:10],  # أول 10 فقط
+                    'video_only': formats_data.get('video_only', [])[:10],
+                    'audio_only': formats_data.get('audio_only', [])[:5],
+                    'all_heights': formats_data.get('all_heights', []),
+                    'max_height': formats_data.get('max_height', 0),
+                    'presets': presets  # هذا هو الأهم!
+                },
                 'info': result.get('info', {}),
                 'platform': result.get('platform', 'unknown'),
-                'debug': debug_info  # معلومات للتصحيح
+                'debug': debug_info
             })
         else:
             return jsonify({
