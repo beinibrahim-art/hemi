@@ -13,6 +13,7 @@ ffmpeg-python==0.2.0
 
 # Speech Recognition
 openai-whisper==20231117
+faster-whisper>=1.0.0  # أسرع بـ 4-5x من Whisper العادي
 SpeechRecognition==3.10.0
 
 # Speaker Diarization (Optional)
