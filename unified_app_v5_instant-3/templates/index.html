@@ -44,12 +44,57 @@
             background-size: 400% 400%;
             animation: gradientShift 15s ease infinite;
             min-height: 100vh;
+            transition: background 0.5s ease;
         }
         
         @keyframes gradientShift {
             0% { background-position: 0% 50%; }
             50% { background-position: 100% 50%; }
             100% { background-position: 0% 50%; }
+        }
+        
+        /* Dark Theme Styles */
+        body.dark-theme {
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a0a1a 25%, #0a0a1a 50%, #1a0a0a 75%, #0a0a0a 100%);
+            background-size: 400% 400%;
+            animation: gradientShift 15s ease infinite;
+        }
+        
+        body.dark-theme .glass,
+        body.dark-theme .glass-card,
+        body.dark-theme .card-glass {
+            background: rgba(20, 20, 20, 0.8);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+        
+        body.dark-theme .input-glass {
+            background: rgba(0, 0, 0, 0.3);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+        
+        body.dark-theme .btn-glass {
+            background: rgba(0, 0, 0, 0.3);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+        
+        /* Dark Theme Toggle */
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 50px;
+            padding: 10px 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            pointer-events: auto !important;
+        }
+        
+        .theme-toggle:hover {
+            background: rgba(255, 255, 255, 0.2);
         }
         
         /* Button Styles */
@@ -232,6 +277,12 @@
 </head>
 <body class="font-sans text-white">
     <div class="container mx-auto px-4 py-8 max-w-7xl">
+        <!-- Theme Toggle -->
+        <button class="theme-toggle" onclick="toggleTheme()" title="تبديل الثيم">
+            <i class="bi bi-moon-fill" id="themeIcon"></i>
+            <span class="mr-2" id="themeText">ثيم ليلي</span>
+        </button>
+        
         <!-- Header -->
         <div class="glass-card rounded-3xl p-8 mb-8 text-center relative">
             <div class="absolute top-4 left-4 glass rounded-xl px-4 py-2 flex items-center gap-2 text-sm">
@@ -382,7 +433,7 @@
                             <!-- Position Selection -->
                             <div class="mb-6">
                                 <label class="block text-sm font-semibold mb-3">الموضع:</label>
-                                <div class="grid grid-cols-3 gap-3">
+                                <div class="grid grid-cols-3 gap-3 mb-4">
                                     <div class="position-option-glass rounded-xl p-4 text-center cursor-pointer" data-position="top" onclick="selectInstantPosition('top')">
                                         <i class="bi bi-arrow-up-circle text-3xl mb-2"></i>
                                         <div>أعلى</div>
@@ -394,6 +445,14 @@
                                     <div class="position-option-glass selected rounded-xl p-4 text-center cursor-pointer" data-position="bottom" onclick="selectInstantPosition('bottom')">
                                         <i class="bi bi-arrow-down-circle text-3xl mb-2"></i>
                                         <div>أسفل</div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-semibold mb-2">التحكم بالارتفاع:</label>
+                                    <input type="range" id="instantVerticalOffset" min="-200" max="200" value="0" class="w-full">
+                                    <div class="text-center mt-1">
+                                        <span id="instantVerticalOffsetValue">0</span> px
+                                        <span class="text-xs text-gray-400 mr-2">(قيمة سالبة للأعلى، موجبة للأسفل)</span>
                                     </div>
                                 </div>
                             </div>
@@ -1208,6 +1267,15 @@
                     updateInstantPreview();
                 });
             }
+            
+            // Vertical offset slider
+            const instantVerticalOffsetSlider = document.getElementById('instantVerticalOffset');
+            if (instantVerticalOffsetSlider) {
+                instantVerticalOffsetSlider.addEventListener('input', function() {
+                    document.getElementById('instantVerticalOffsetValue').textContent = this.value;
+                    updateInstantPreview();
+                });
+            }
         }
 
         function handleFileSelect(inputId) {
@@ -1472,10 +1540,13 @@
             const fontColor = document.getElementById('instantFontColor')?.value || '#FFFFFF';
             const bgColor = document.getElementById('instantBgColor')?.value || '#000000';
             const bgOpacity = document.getElementById('instantBgOpacity')?.value || 128;
+            const verticalOffset = parseInt(document.getElementById('instantVerticalOffset')?.value || 0);
             
             preview.style.fontSize = fontSize + 'px';
             preview.style.color = fontColor;
             preview.style.fontFamily = instantSelectedFont;
+            preview.style.textAlign = 'center'; // محاذاة في المنتصف للنص العربي
+            preview.style.direction = 'rtl'; // اتجاه RTL للنص العربي
             
             const r = parseInt(bgColor.substr(1,2), 16);
             const g = parseInt(bgColor.substr(3,2), 16);
@@ -1487,16 +1558,16 @@
             preview.style.transform = 'translateX(-50%)';
             
             if (instantSelectedPosition === 'top') {
-                preview.style.top = '50px';
+                preview.style.top = (50 + verticalOffset) + 'px';
                 preview.style.bottom = 'auto';
             } else if (instantSelectedPosition === 'center') {
                 preview.style.top = '50%';
                 preview.style.bottom = 'auto';
-                preview.style.transform = 'translate(-50%, -50%)';
+                preview.style.transform = `translate(-50%, calc(-50% + ${verticalOffset}px))`;
             } else {
-                preview.style.bottom = '50px';
+                preview.style.bottom = (50 - verticalOffset) + 'px';
                 preview.style.top = 'auto';
-                preview.style.transform = 'translateX(-50%)';
+                preview.style.transform = `translateX(-50%) translateY(${-verticalOffset}px)`;
             }
         }
         window.updateInstantPreview = updateInstantPreview;
@@ -1522,10 +1593,12 @@
             try {
                 updateInstantProgress(85, 'جاري دمج الترجمة مع الفيديو...');
                 
+                // استخدام الإعدادات الفعلية من المعاينة
                 const fontSize = document.getElementById('instantFontSize')?.value || 20;
                 const fontColor = document.getElementById('instantFontColor')?.value || '#FFFFFF';
                 const bgColor = document.getElementById('instantBgColor')?.value || '#000000';
                 const bgOpacity = document.getElementById('instantBgOpacity')?.value || 128;
+                const verticalOffset = parseInt(document.getElementById('instantVerticalOffset')?.value || 0);
                 
                 const response = await axios.post('/api/instant-translate', {
                     step: 'merge',
@@ -1541,7 +1614,8 @@
                     bg_opacity: bgOpacity,
                     position: instantSelectedPosition,
                     font_name: instantSelectedFont,
-                    quality: instantSelectedQuality
+                    quality: instantSelectedQuality,
+                    vertical_offset: verticalOffset // إضافة التحكم بالارتفاع
                 });
                 
                 if (response.data.success) {
@@ -2009,6 +2083,47 @@
             showAlert('اكتملت المعالجة الدفعية!', 'success');
         };
 
+        window.toggleTheme = function() {
+            const body = document.body;
+            const themeIcon = document.getElementById('themeIcon');
+            const themeText = document.getElementById('themeText');
+            
+            if (body.classList.contains('dark-theme')) {
+                body.classList.remove('dark-theme');
+                themeIcon.className = 'bi bi-moon-fill';
+                themeText.textContent = 'ثيم ليلي';
+                localStorage.setItem('theme', 'light');
+            } else {
+                body.classList.add('dark-theme');
+                themeIcon.className = 'bi bi-sun-fill';
+                themeText.textContent = 'ثيم فاتح';
+                localStorage.setItem('theme', 'dark');
+            }
+        };
+        
+        // Load saved theme on page load
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                const savedTheme = localStorage.getItem('theme');
+                if (savedTheme === 'dark') {
+                    document.body.classList.add('dark-theme');
+                    const themeIcon = document.getElementById('themeIcon');
+                    const themeText = document.getElementById('themeText');
+                    if (themeIcon) themeIcon.className = 'bi bi-sun-fill';
+                    if (themeText) themeText.textContent = 'ثيم فاتح';
+                }
+            });
+        } else {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'dark') {
+                document.body.classList.add('dark-theme');
+                const themeIcon = document.getElementById('themeIcon');
+                const themeText = document.getElementById('themeText');
+                if (themeIcon) themeIcon.className = 'bi bi-sun-fill';
+                if (themeText) themeText.textContent = 'ثيم فاتح';
+            }
+        }
+        
         // ========== HELPER FUNCTIONS ==========
         window.copyText = function(text) {
             navigator.clipboard.writeText(text).then(() => {

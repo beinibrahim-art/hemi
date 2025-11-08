@@ -306,17 +306,28 @@ class SubtitleProcessor:
         font_name: str = "Arial",
         vertical_offset: int = 0
     ) -> str:
-        """إنشاء ملف ASS"""
+        """إنشاء ملف ASS مع محاذاة صحيحة للنص العربي"""
+        # تحويل الألوان من hex إلى ASS format
         ass_font_color = f"&H00{font_color[-2:]}{font_color[2:4]}{font_color[:2]}"
         ass_bg_color = f"&H{hex(bg_opacity)[2:].upper():0>2}{bg_color[-2:]}{bg_color[2:4]}{bg_color[:2]}"
         
-        alignment = {'top': '8', 'center': '5', 'bottom': '2'}.get(position, '2')
+        # محاذاة مركزية للنص العربي (Alignment=5)
+        # Alignment values: 1=bottom-left, 2=bottom-center, 3=bottom-right
+        #                  4=middle-left, 5=middle-center, 6=middle-right
+        #                  7=top-left, 8=top-center, 9=top-right
+        alignment_map = {
+            'top': '8',      # top-center
+            'center': '5',   # middle-center (محاذاة في المنتصف)
+            'bottom': '2'    # bottom-center
+        }
+        alignment = alignment_map.get(position, '5')  # افتراضي: center للمحاذاة الصحيحة
         
+        # حساب MarginV بناءً على الموضع والارتفاع
         if position == 'top':
             margin_v = max(10, 10 + vertical_offset)
         elif position == 'center':
-            margin_v = 10
-        else:
+            margin_v = 10  # سيتم استخدام \pos للتحكم الدقيق
+        else:  # bottom
             margin_v = max(10, 10 - vertical_offset)
         
         ass_header = f"""[Script Info]
@@ -354,11 +365,31 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         start_ass = SubtitleProcessor.srt_time_to_ass(start)
                         end_ass = SubtitleProcessor.srt_time_to_ass(end)
                         
-                        effect = ''
-                        if position == 'center' and vertical_offset != 0:
-                            effect = f"\\pos(960,{540 + vertical_offset})"
+                        # إضافة تأثيرات للتحكم الدقيق بالموقع
+                        effects = []
                         
-                        events.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,{effect},{text}")
+                        # استخدام \pos للتحكم الدقيق في الموضع والارتفاع
+                        # 960 = منتصف الشاشة أفقياً (1920/2)
+                        if position == 'center':
+                            y_pos = 540 + vertical_offset  # 540 = منتصف الشاشة (1080/2)
+                            effects.append(f"\\pos(960,{y_pos})")
+                        elif position == 'top':
+                            y_pos = 50 + vertical_offset
+                            effects.append(f"\\pos(960,{y_pos})")
+                        else:  # bottom
+                            y_pos = 1030 - vertical_offset  # 1030 = من الأسفل (1080 - 50)
+                            effects.append(f"\\pos(960,{y_pos})")
+                        
+                        # محاذاة مركزية للنص العربي (مهم جداً)
+                        # \an5 = Alignment=5 (middle-center) - محاذاة في المنتصف
+                        effects.append("\\an5")
+                        
+                        effect_str = ''.join(effects) if effects else ''
+                        
+                        # تنظيف النص وإضافة تأثيرات المحاذاة
+                        text_with_effects = f"{effect_str}{text}"
+                        
+                        events.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text_with_effects}")
                     
                     i += 4
                 else:
@@ -472,7 +503,7 @@ class VideoProcessor:
                 opacity_hex = format(opacity, '02X')
                 style_options.append(f"BackColour=&H{opacity_hex}{b}{g}{r}")
         
-        alignment = {'top': '8', 'center': '5', 'bottom': '2'}.get(settings.get('position', 'bottom'), '2')
+        alignment = {'top': '8', 'center': '5', 'bottom': '2'}.get(settings.get('position', 'bottom'), '5')  # افتراضي: center للمحاذاة الصحيحة
         style_options.append(f"Alignment={alignment}")
         
         if style_options:
