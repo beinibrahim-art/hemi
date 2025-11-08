@@ -13,7 +13,7 @@ clear
 
 echo -e "${PURPLE}╔═══════════════════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${CYAN}║                                                                           ║${NC}"
-echo -e "${CYAN}║        🎬 التطبيق المتكامل المحسن - v4.0                               ║${NC}"
+echo -e "${CYAN}║        🎬 التطبيق المتكامل للترجمة والتحميل - v5.0                               ║${NC}"
 echo -e "${CYAN}║        دعم محسن لجميع المنصات + محرر الترجمة الاحترافي                 ║${NC}"
 echo -e "${CYAN}║                                                                           ║${NC}"
 echo -e "${PURPLE}╚═══════════════════════════════════════════════════════════════════════════╝${NC}"
@@ -130,8 +130,8 @@ echo ""
 
 # Check Files
 echo -e "${BLUE}[5/5] التحقق من الملفات...${NC}"
-if [ ! -f "unified_app_enhanced.py" ]; then
-    echo -e "${RED}❌ unified_app_enhanced.py غير موجود!${NC}"
+if [ ! -f "app.py" ]; then
+    echo -e "${RED}❌ app.py غير موجود!${NC}"
     exit 1
 fi
 echo -e "${GREEN}✅ الملف الرئيسي موجود${NC}"
@@ -219,4 +219,4 @@ fi
 # Run the app
 echo -e "${CYAN}🔥 بدء التشغيل...${NC}"
 echo ""
-python3 unified_app_enhanced.py
+python3 app.py
