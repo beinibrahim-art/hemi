@@ -766,16 +766,23 @@ class VideoProcessor:
                 vf_filter = f"ass={subtitle_path_escaped}"
             
             # محاولة استخدام ass filter أو subtitles filter مع دعم UTF-8 للعربية
+            # إعدادات متوافقة مع جميع الأجهزة (MP4 H.264)
             cmd = [
                 'ffmpeg',
                 '-i', video_path,
                 '-vf', vf_filter,
-                '-c:a', 'copy',
-                '-c:v', 'libx264',
-                '-preset', 'fast',
-                '-crf', '23',
+                '-c:v', 'libx264',  # H.264 codec
+                '-preset', 'medium',  # توازن بين السرعة والجودة
+                '-crf', '23',  # جودة جيدة
+                '-profile:v', 'high',  # High profile متوافق مع جميع الأجهزة
+                '-level', '4.0',  # Level 4.0 متوافق مع معظم الأجهزة
+                '-pix_fmt', 'yuv420p',  # متوافق مع جميع الأجهزة
+                '-c:a', 'aac',  # AAC audio متوافق
+                '-b:a', '128k',  # bitrate صوت جيد
+                '-movflags', '+faststart',  # لضمان التشغيل السريع
                 '-threads', '0',
                 '-sub_charenc', 'UTF-8',  # تحديد ترميز الترجمة كـ UTF-8
+                '-f', 'mp4',  # إجبار صيغة MP4
                 '-y',
                 output_path
             ]
@@ -810,12 +817,18 @@ class VideoProcessor:
                         'ffmpeg',
                         '-i', video_path,
                         '-vf', vf_filter_alt,
-                        '-c:a', 'copy',
-                        '-c:v', 'libx264',
-                        '-preset', 'fast',
-                        '-crf', '23',
+                        '-c:v', 'libx264',  # H.264 codec
+                        '-preset', 'medium',  # توازن بين السرعة والجودة
+                        '-crf', '23',  # جودة جيدة
+                        '-profile:v', 'high',  # High profile متوافق مع جميع الأجهزة
+                        '-level', '4.0',  # Level 4.0 متوافق مع معظم الأجهزة
+                        '-pix_fmt', 'yuv420p',  # متوافق مع جميع الأجهزة
+                        '-c:a', 'aac',  # AAC audio متوافق
+                        '-b:a', '128k',  # bitrate صوت جيد
+                        '-movflags', '+faststart',  # لضمان التشغيل السريع
                         '-threads', '0',
                         '-sub_charenc', 'UTF-8',  # تحديد ترميز الترجمة كـ UTF-8
+                        '-f', 'mp4',  # إجبار صيغة MP4
                         '-y',
                         output_path
                     ]
@@ -1258,6 +1271,10 @@ class SmartMediaDownloader:
                 if video_files:
                     video_files.sort(key=lambda x: x[1], reverse=True)
                     downloaded_file = str(video_files[0][0])
+                    
+                    # تحويل إلى MP4 H.264 إذا لم يكن كذلك
+                    if downloaded_file and not downloaded_file.endswith('.mp3'):
+                        downloaded_file = self._ensure_mp4_h264(downloaded_file)
                 
                 download_progress[download_id] = {
                     'status': 'completed',
@@ -1289,7 +1306,12 @@ class SmartMediaDownloader:
             if is_audio or format_cmd == 'audio':
                 cmd.extend(['-x', '--audio-format', 'mp3', '--audio-quality', '0'])
             else:
-                cmd.extend(['-f', format_cmd, '--merge-output-format', 'mp4'])
+                # إجبار MP4 H.264 متوافق مع جميع الأجهزة
+                cmd.extend([
+                    '-f', format_cmd,
+                    '--merge-output-format', 'mp4',
+                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart'
+                ])
             
             cmd.extend([
                 '-o', output_template,
@@ -1316,7 +1338,12 @@ class SmartMediaDownloader:
             if is_audio or format_cmd == 'audio':
                 cmd.extend(['-x', '--audio-format', 'mp3'])
             else:
-                cmd.extend(['-f', format_cmd])
+                # إجبار MP4 H.264 متوافق مع جميع الأجهزة
+                cmd.extend([
+                    '-f', format_cmd,
+                    '--merge-output-format', 'mp4',
+                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart'
+                ])
             
             cmd.extend(['-o', output_template, '--no-warnings', url])
             
@@ -1338,7 +1365,12 @@ class SmartMediaDownloader:
             if is_audio:
                 cmd.extend(['-x', '--audio-format', 'mp3'])
             else:
-                cmd.extend(['-f', 'best[ext=mp4]/best'])
+                # إجبار MP4 H.264 متوافق مع جميع الأجهزة
+                cmd.extend([
+                    '-f', 'best[ext=mp4]/best',
+                    '--merge-output-format', 'mp4',
+                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart'
+                ])
             
             cmd.extend(['-o', output_template, '--no-warnings', url])
             
@@ -1355,7 +1387,18 @@ class SmartMediaDownloader:
         try:
             output_template = str(self.output_dir / '%(title)s.%(ext)s')
             
-            cmd = ['yt-dlp', '-o', output_template, '--no-warnings', url]
+            cmd = ['yt-dlp']
+            
+            if is_audio:
+                cmd.extend(['-x', '--audio-format', 'mp3'])
+            else:
+                # إجبار MP4 H.264 متوافق مع جميع الأجهزة
+                cmd.extend([
+                    '--merge-output-format', 'mp4',
+                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart'
+                ])
+            
+            cmd.extend(['-o', output_template, '--no-warnings', url])
             
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
                                       stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -1386,6 +1429,55 @@ class SmartMediaDownloader:
         except Exception as e:
             logger.error(f"Monitor failed: {e}")
             return False
+    
+    def _ensure_mp4_h264(self, video_path: str) -> str:
+        """تحويل الفيديو إلى MP4 H.264 متوافق مع جميع الأجهزة"""
+        try:
+            video_file = Path(video_path)
+            
+            # إذا كان الملف MP4 بالفعل، تحقق من codec
+            if video_file.suffix.lower() == '.mp4':
+                # محاولة التحقق من codec (اختياري - يمكن تخطيه للسرعة)
+                return str(video_file)
+            
+            # تحويل إلى MP4 H.264
+            output_file = video_file.with_suffix('.mp4')
+            if output_file == video_file:
+                # إذا كان نفس الملف، أنشئ ملف جديد
+                output_file = video_file.parent / f"{video_file.stem}_converted.mp4"
+            
+            cmd = [
+                'ffmpeg',
+                '-i', str(video_file),
+                '-c:v', 'libx264',
+                '-profile:v', 'high',
+                '-level', '4.0',
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac',
+                '-b:a', '128k',
+                '-movflags', '+faststart',
+                '-y',
+                str(output_file)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, timeout=300, text=True)
+            
+            if result.returncode == 0 and output_file.exists():
+                # حذف الملف الأصلي إذا كان مختلفاً
+                if output_file != video_file:
+                    try:
+                        video_file.unlink()
+                    except:
+                        pass
+                logger.info(f"Converted video to MP4 H.264: {output_file}")
+                return str(output_file)
+            else:
+                logger.warning(f"Conversion failed, using original: {result.stderr}")
+                return str(video_file)
+                
+        except Exception as e:
+            logger.error(f"Error converting video: {e}")
+            return str(video_path)  # إرجاع الملف الأصلي في حالة الفشل
 
 # Initialize downloader
 downloader = SmartMediaDownloader()
@@ -1432,11 +1524,24 @@ def api_instant_translate():
             else:
                 format_cmd = quality
             
+            # إعدادات yt-dlp مع تحويل إلى MP4 H.264 متوافق
             ydl_opts = {
                 'format': format_cmd,
                 'outtmpl': str(download_folder / '%(title)s.%(ext)s'),
                 'quiet': True,
-                'no_warnings': True
+                'no_warnings': True,
+                'merge_output_format': 'mp4',
+                'postprocessor_args': {
+                    'ffmpeg': [
+                        '-c:v', 'libx264',
+                        '-profile:v', 'high',
+                        '-level', '4.0',
+                        '-pix_fmt', 'yuv420p',
+                        '-c:a', 'aac',
+                        '-b:a', '128k',
+                        '-movflags', '+faststart'
+                    ]
+                }
             }
             
             try:
@@ -2054,11 +2159,24 @@ def api_transcribe_from_url():
         else:
             format_cmd = quality
         
+        # إعدادات yt-dlp مع تحويل إلى MP4 H.264 متوافق
         ydl_opts = {
             'format': format_cmd,
             'outtmpl': str(download_folder / '%(title)s.%(ext)s'),
             'quiet': True,
-            'no_warnings': True
+            'no_warnings': True,
+            'merge_output_format': 'mp4',
+            'postprocessor_args': {
+                'ffmpeg': [
+                    '-c:v', 'libx264',
+                    '-profile:v', 'high',
+                    '-level', '4.0',
+                    '-pix_fmt', 'yuv420p',
+                    '-c:a', 'aac',
+                    '-b:a', '128k',
+                    '-movflags', '+faststart'
+                ]
+            }
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
