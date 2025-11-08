@@ -47,6 +47,10 @@ app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['DOWNLOAD_FOLDER'] = 'downloads'
 app.config['OUTPUT_FOLDER'] = 'outputs'
 app.config['SUBTITLE_FOLDER'] = 'subtitles'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+# تقليل حجم session cookie
+app.config['PERMANENT_SESSION_LIFETIME'] = 1800  # 30 دقيقة
 
 # إعدادات السجلات
 logging.basicConfig(
@@ -651,17 +655,29 @@ def api_instant_translate():
                             video_file = path
                             break
                 
-                session['video_file'] = video_file
+                # استخدام ملف مؤقت بدلاً من session لتقليل حجم cookie
+                temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+                with open(temp_file, 'w') as f:
+                    f.write(video_file)
+                
                 return jsonify({
                     'success': True,
                     'file': video_file,
-                    'info': result['info']
+                    'info': result['info'],
+                    'temp_file': os.path.basename(temp_file)
                 })
             else:
                 return jsonify({'success': False, 'message': result['message']}), 400
         
         elif step == 'extract_audio':
-            video_file = data.get('video_file') or session.get('video_file')
+            video_file = data.get('video_file')
+            
+            # قراءة من الملف المؤقت إذا لزم الأمر
+            if not video_file and data.get('temp_video_file'):
+                temp_path = os.path.join(app.config['DOWNLOAD_FOLDER'], data['temp_video_file'])
+                if os.path.exists(temp_path):
+                    with open(temp_path, 'r') as f:
+                        video_file = f.read().strip()
             
             if video_file and not os.path.isabs(video_file):
                 normalized = video_file.replace('downloads/', '').replace('downloads\\', '')
@@ -696,10 +712,15 @@ def api_instant_translate():
             
             try:
                 result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
-                session['audio_file'] = audio_file
+                # حفظ في ملف مؤقت بدلاً من session
+                temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+                with open(temp_file, 'w') as f:
+                    f.write(audio_file)
+                
                 return jsonify({
                     'success': True,
-                    'audio_file': audio_file
+                    'audio_file': audio_file,
+                    'temp_file': os.path.basename(temp_file)
                 })
             except subprocess.CalledProcessError as e:
                 logger.error(f"FFmpeg error: {e.stderr}")
@@ -711,9 +732,16 @@ def api_instant_translate():
             if not WHISPER_AVAILABLE:
                 return jsonify({'success': False, 'message': 'Whisper غير متوفر'}), 503
             
-            audio_file = data.get('audio_file') or session.get('audio_file')
+            audio_file = data.get('audio_file')
             model_size = data.get('model', 'base')
             language = data.get('language', 'auto')
+            
+            # قراءة من الملف المؤقت إذا لزم الأمر
+            if not audio_file and data.get('temp_audio_file'):
+                temp_path = os.path.join(app.config['DOWNLOAD_FOLDER'], data['temp_audio_file'])
+                if os.path.exists(temp_path):
+                    with open(temp_path, 'r') as f:
+                        audio_file = f.read().strip()
             
             if not audio_file or not os.path.exists(audio_file):
                 return jsonify({'success': False, 'message': 'ملف الصوت غير موجود'}), 400
@@ -735,16 +763,21 @@ def api_instant_translate():
             
             result = model.transcribe(audio_file, **options)
             
-            session['transcript'] = result['text']
-            session['source_language'] = result.get('language', language)
-            if 'segments' in result:
-                session['whisper_segments'] = result['segments']
+            # حفظ في ملف مؤقت بدلاً من session
+            temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'text': result['text'],
+                    'language': result.get('language', language),
+                    'segments': result.get('segments', [])
+                }, f, ensure_ascii=False)
             
             return jsonify({
                 'success': True,
                 'text': result['text'],
                 'language': result.get('language', language),
-                'segments': result.get('segments', [])
+                'segments': result.get('segments', []),
+                'temp_file': os.path.basename(temp_file)
             })
         
         elif step == 'translate':
@@ -760,18 +793,35 @@ def api_instant_translate():
             translator = GoogleTranslator(source=source_lang, target='ar')
             translated = translator.translate(text)
             
-            session['translated_text'] = translated
+            # حفظ في ملف مؤقت بدلاً من session
+            temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                f.write(translated)
             
             return jsonify({
                 'success': True,
-                'translated_text': translated
+                'translated_text': translated,
+                'temp_file': os.path.basename(temp_file)
             })
         
         elif step == 'merge':
-            video_file = data.get('video_file') or session.get('video_file')
-            subtitle_text = data.get('subtitle_text') or session.get('translated_text')
+            video_file = data.get('video_file')
+            subtitle_text = data.get('subtitle_text')
             settings = data.get('settings', {})
             quality = data.get('quality', 'original')
+            
+            # قراءة من الملفات المؤقتة إذا لزم الأمر
+            if not video_file and data.get('temp_video_file'):
+                temp_path = os.path.join(app.config['DOWNLOAD_FOLDER'], data['temp_video_file'])
+                if os.path.exists(temp_path):
+                    with open(temp_path, 'r') as f:
+                        video_file = f.read().strip()
+            
+            if not subtitle_text and data.get('temp_translated_file'):
+                temp_path = os.path.join(app.config['DOWNLOAD_FOLDER'], data['temp_translated_file'])
+                if os.path.exists(temp_path):
+                    with open(temp_path, 'r', encoding='utf-8') as f:
+                        subtitle_text = f.read().strip()
             
             if video_file and not os.path.isabs(video_file):
                 possible_paths = [
@@ -791,12 +841,26 @@ def api_instant_translate():
                 return jsonify({'success': False, 'message': 'لا يوجد نص للترجمة'}), 400
             
             video_duration = VideoProcessor.get_video_duration(video_file)
-            whisper_segments = session.get('whisper_segments', None)
-            original_text = session.get('transcript', '')
+            
+            # قراءة البيانات من الملفات المؤقتة بدلاً من session
+            whisper_segments = None
+            original_text = ''
+            source_language = 'auto'
+            
+            # البحث عن ملفات مؤقتة
+            temp_transcript_file = data.get('temp_transcript_file')
+            if temp_transcript_file:
+                temp_path = os.path.join(app.config['DOWNLOAD_FOLDER'], temp_transcript_file)
+                if os.path.exists(temp_path):
+                    with open(temp_path, 'r', encoding='utf-8') as f:
+                        transcript_data = json.load(f)
+                        whisper_segments = transcript_data.get('segments', [])
+                        original_text = transcript_data.get('text', '')
+                        source_language = transcript_data.get('language', 'auto')
             
             if whisper_segments and len(whisper_segments) > 0:
                 segments_for_srt = []
-                translator = GoogleTranslator(source=session.get('source_language', 'auto'), target='ar')
+                translator = GoogleTranslator(source=source_language, target='ar')
                 
                 for i, segment in enumerate(whisper_segments):
                     start_time = float(segment.get('start', 0))
@@ -886,9 +950,19 @@ def api_instant_translate():
             )
             
             if result['success']:
+                # تنظيف الملفات المؤقتة
                 try:
-                    if 'audio_file' in session and os.path.exists(session['audio_file']):
-                        os.remove(session['audio_file'])
+                    temp_files = [
+                        data.get('temp_video_file'),
+                        data.get('temp_audio_file'),
+                        data.get('temp_transcript_file'),
+                        data.get('temp_translated_file')
+                    ]
+                    for temp_file in temp_files:
+                        if temp_file:
+                            temp_path = os.path.join(app.config['DOWNLOAD_FOLDER'], temp_file)
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
                 except:
                     pass
                 
@@ -1248,17 +1322,43 @@ def api_cleanup_files():
 @app.route('/download/<path:filename>')
 def download_file(filename):
     """تحميل الملفات"""
+    # معالجة المسارات المشفرة وإزالة "downloads/" من البداية
+    filename = filename.replace('%2F', '/').replace('%5C', '\\')
+    
+    # إزالة "downloads/" من البداية إذا كان موجوداً
+    if filename.startswith('downloads/'):
+        filename = filename.replace('downloads/', '', 1)
+    if filename.startswith('downloads\\'):
+        filename = filename.replace('downloads\\', '', 1)
+    
     folders = [
         app.config['OUTPUT_FOLDER'],
         app.config['DOWNLOAD_FOLDER'],
         app.config['SUBTITLE_FOLDER']
     ]
     
+    # محاولة البحث في المجلدات
     for folder in folders:
+        # محاولة بالمسار الكامل
         filepath = os.path.join(folder, filename)
         if os.path.exists(filepath):
             return send_file(filepath, as_attachment=True)
+        
+        # محاولة بالاسم فقط
+        basename = os.path.basename(filename)
+        filepath = os.path.join(folder, basename)
+        if os.path.exists(filepath):
+            return send_file(filepath, as_attachment=True)
     
+    # البحث في جميع الملفات
+    for folder in folders:
+        if os.path.exists(folder):
+            for root, dirs, files in os.walk(folder):
+                for file in files:
+                    if file == os.path.basename(filename) or file == filename:
+                        return send_file(os.path.join(root, file), as_attachment=True)
+    
+    logger.error(f"File not found: {filename}")
     return "File not found", 404
 
 
