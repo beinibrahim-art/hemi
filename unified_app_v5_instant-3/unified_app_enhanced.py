@@ -682,6 +682,69 @@ def index():
                          whisper_available=WHISPER_AVAILABLE,
                          translator_available=TRANSLATOR_AVAILABLE)
 
+@app.route('/api/get-video-thumbnail', methods=['POST'])
+def api_get_video_thumbnail():
+    """استخراج صورة مصغرة من الفيديو للمعاينة"""
+    try:
+        data = request.json
+        # Get video file path
+        video_file = data.get('video_file') or session.get('video_file')
+        
+        # Handle relative paths
+        if video_file and not os.path.isabs(video_file):
+            # Try different possible locations
+            possible_paths = [
+                os.path.join(app.config['DOWNLOAD_FOLDER'], video_file),
+                os.path.join(app.config['UPLOAD_FOLDER'], video_file),
+                video_file
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    video_file = path
+                    break
+        
+        if not video_file or not os.path.exists(video_file):
+            return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
+        
+        # Check if ffmpeg is available
+        if not VideoProcessor.check_ffmpeg():
+            return jsonify({'success': False, 'message': 'ffmpeg غير متوفر'}), 503
+        
+        # Generate thumbnail filename
+        thumbnail_filename = f"thumb_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        thumbnail_path = os.path.join(app.config['OUTPUT_FOLDER'], thumbnail_filename)
+        
+        # Extract thumbnail using ffmpeg (at 1 second or middle of video)
+        cmd = [
+            'ffmpeg',
+            '-i', video_file,
+            '-ss', '00:00:01',  # At 1 second
+            '-vframes', '1',
+            '-vf', 'scale=640:-1',  # Scale to 640px width, maintain aspect ratio
+            '-y',
+            thumbnail_path
+        ]
+        
+        process = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if process.returncode == 0 and os.path.exists(thumbnail_path):
+            return jsonify({
+                'success': True,
+                'thumbnail_url': f'/download/{thumbnail_filename}',
+                'thumbnail_path': thumbnail_path
+            })
+        else:
+            return jsonify({'success': False, 'message': 'فشل استخراج الصورة المصغرة'}), 500
+            
+    except Exception as e:
+        logger.error(f"Thumbnail extraction error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/api/instant-translate', methods=['POST'])
 def api_instant_translate():
     """API للترجمة الفورية - معالجة الخطوات المتعددة"""
@@ -709,9 +772,11 @@ def api_instant_translate():
             if result['success']:
                 # Store file path in session or temp storage
                 session['video_file'] = result['file']
+                # Return full path for thumbnail extraction
+                full_path = result['file'] if os.path.isabs(result['file']) else os.path.join(app.config['DOWNLOAD_FOLDER'], result['file'])
                 return jsonify({
                     'success': True,
-                    'file': result['file'],
+                    'file': full_path,
                     'info': result['info']
                 })
             else:

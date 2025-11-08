@@ -19,3 +19,19 @@
 2025-11-08 11:43:58,626 - INFO - 127.0.0.1 - - [08/Nov/2025 11:43:58] "GET / HTTP/1.1" 200 -
 2025-11-08 11:45:45,194 - INFO - 127.0.0.1 - - [08/Nov/2025 11:45:45] "GET / HTTP/1.1" 200 -
 2025-11-08 11:45:47,863 - INFO - 127.0.0.1 - - [08/Nov/2025 11:45:47] "GET / HTTP/1.1" 200 -
+2025-11-08 12:18:13,069 - INFO -  * Detected change in '/workspace/unified_app_v5_instant-3/unified_app_enhanced.py', reloading
+2025-11-08 12:18:13,136 - INFO -  * Restarting with stat
+2025-11-08 12:18:13,304 - WARNING -  * Debugger is active!
+2025-11-08 12:18:13,305 - INFO -  * Debugger PIN: 669-144-625
+2025-11-08 12:18:19,349 - INFO -  * Detected change in '/workspace/unified_app_v5_instant-3/unified_app_enhanced.py', reloading
+2025-11-08 12:18:19,388 - INFO -  * Restarting with stat
+2025-11-08 12:18:19,536 - WARNING -  * Debugger is active!
+2025-11-08 12:18:19,537 - INFO -  * Debugger PIN: 669-144-625
+2025-11-08 12:18:20,557 - INFO -  * Detected change in '/workspace/unified_app_v5_instant-3/unified_app_enhanced.py', reloading
+2025-11-08 12:18:20,593 - INFO -  * Restarting with stat
+2025-11-08 12:18:20,734 - WARNING -  * Debugger is active!
+2025-11-08 12:18:20,736 - INFO -  * Debugger PIN: 669-144-625
+2025-11-08 12:18:24,768 - INFO -  * Detected change in '/workspace/unified_app_v5_instant-3/unified_app_enhanced.py', reloading
+2025-11-08 12:18:24,806 - INFO -  * Restarting with stat
+2025-11-08 12:18:24,946 - WARNING -  * Debugger is active!
+2025-11-08 12:18:24,948 - INFO -  * Debugger PIN: 669-144-625

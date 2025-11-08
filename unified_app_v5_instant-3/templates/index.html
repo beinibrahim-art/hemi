@@ -268,23 +268,43 @@
         }
 
         .preview-section {
-            background: #000;
-            border-radius: 15px;
+            background: linear-gradient(135deg, rgba(15, 15, 15, 0.95), rgba(26, 26, 26, 0.95));
+            border-radius: 20px;
             padding: 20px;
-            min-height: 400px;
+            min-height: 450px;
             position: relative;
             overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
         }
 
         .video-preview {
             width: 100%;
-            height: 400px;
-            background: #000;
-            border-radius: 10px;
+            min-height: 400px;
+            max-height: 600px;
+            background: linear-gradient(135deg, #0a0a0a, #1a1a1a);
+            border-radius: 15px;
             display: flex;
             align-items: center;
             justify-content: center;
             position: relative;
+            overflow: hidden;
+            aspect-ratio: 16/9;
+            border: 2px solid rgba(245, 158, 11, 0.2);
+        }
+
+        .video-preview.portrait {
+            aspect-ratio: 9/16;
+            max-width: 400px;
+            margin: 0 auto;
+        }
+
+        .video-preview img,
+        .video-preview video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 10px;
         }
 
         .subtitle-preview {
@@ -292,12 +312,33 @@
             bottom: 50px;
             left: 50%;
             transform: translateX(-50%);
-            padding: 10px 20px;
-            border-radius: 5px;
+            padding: 12px 24px;
+            border-radius: 8px;
             font-size: 20px;
             text-align: center;
-            max-width: 80%;
-            transition: all 0.3s;
+            max-width: 85%;
+            min-width: 200px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            word-wrap: break-word;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+            z-index: 10;
+        }
+
+        .subtitle-preview.top {
+            top: 50px;
+            bottom: auto;
+        }
+
+        .subtitle-preview.center {
+            top: 50%;
+            bottom: auto;
+            transform: translate(-50%, -50%);
+        }
+
+        .subtitle-preview.bottom {
+            bottom: 50px;
+            top: auto;
         }
 
         .color-picker-wrapper {
@@ -486,26 +527,52 @@
             transform: scale(1.05);
         }
 
+        /* Enhanced Settings Section */
+        #instantSubtitleSettings {
+            background: linear-gradient(135deg, rgba(26, 26, 26, 0.95), rgba(15, 15, 15, 0.95));
+            border-radius: 20px;
+            padding: 30px;
+            border: 1px solid rgba(245, 158, 11, 0.2);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            margin-top: 30px;
+            animation: fadeInUp 0.5s ease-out;
+        }
+
+        #instantSubtitleSettings h4 {
+            color: #f59e0b;
+            margin-bottom: 25px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #instantSubtitleSettings .form-label {
+            color: #e5e5e5;
+            font-weight: 500;
+            margin-bottom: 10px;
+            font-size: 0.95rem;
+        }
+
+        /* Responsive adjustments */
         @media (max-width: 768px) {
-            .header h1 {
-                font-size: 1.8rem;
+            .video-preview {
+                min-height: 300px;
+                max-height: 400px;
             }
             
-            .nav-tabs .nav-link {
-                padding: 10px 15px;
-                font-size: 0.9rem;
+            .video-preview.portrait {
+                max-width: 300px;
             }
             
-            .card-custom {
+            .subtitle-preview {
+                font-size: 16px;
+                padding: 10px 16px;
+                max-width: 90%;
+            }
+            
+            #instantSubtitleSettings {
                 padding: 20px;
-            }
-            
-            .quality-cards {
-                grid-template-columns: 1fr;
-            }
-            
-            .position-selector {
-                grid-template-columns: 1fr;
             }
         }
 
@@ -782,15 +849,22 @@
                                 
                                 <!-- Preview Section -->
                                 <div class="mt-4">
-                                    <h5 class="mb-3"><i class="bi bi-eye"></i> معاينة الترجمة</h5>
+                                    <div class="d-flex justify-content-between align-items-center mb-3">
+                                        <h5 class="mb-0"><i class="bi bi-eye"></i> معاينة الترجمة</h5>
+                                        <div class="badge bg-primary" id="instantVideoAspectRatio" style="display: none;">
+                                            <i class="bi bi-aspect-ratio"></i> <span id="aspectRatioText">16:9</span>
+                                        </div>
+                                    </div>
                                     <div class="preview-section">
-                                        <div class="video-preview">
-                                            <video id="instantVideoPreview" style="width: 100%; height: 100%; display: none;" controls></video>
-                                            <div id="instantNoVideoPreview" style="color: rgba(255,255,255,0.5);">
-                                                <i class="bi bi-film" style="font-size: 3rem;"></i>
-                                                <p>سيتم عرض معاينة الفيديو مع الترجمة هنا</p>
+                                        <div class="video-preview" id="instantVideoPreviewContainer">
+                                            <img id="instantVideoThumbnail" style="width: 100%; height: 100%; object-fit: contain; display: none; border-radius: 10px;" alt="Video Preview">
+                                            <video id="instantVideoPreview" style="width: 100%; height: 100%; display: none; border-radius: 10px;" controls></video>
+                                            <div id="instantNoVideoPreview" style="color: rgba(255,255,255,0.5); text-align: center; padding: 40px;">
+                                                <i class="bi bi-film" style="font-size: 4rem; display: block; margin-bottom: 15px; opacity: 0.5;"></i>
+                                                <p style="font-size: 1.1rem; margin: 0;">سيتم عرض معاينة الفيديو مع الترجمة هنا</p>
+                                                <small style="opacity: 0.7;">بعد اكتمال الترجمة</small>
                                             </div>
-                                            <div class="subtitle-preview" id="instantSubtitlePreview">
+                                            <div class="subtitle-preview bottom" id="instantSubtitlePreview">
                                                 هذا مثال على شكل الترجمة
                                             </div>
                                         </div>
@@ -1417,13 +1491,9 @@
                 document.getElementById('instantTranscriptText').value = translateResponse.data.translated_text;
                 document.getElementById('instantTranscript').style.display = 'block';
                 
-                // Load video preview if available
+                // Load video preview and thumbnail
                 if (downloadResponse.data.file) {
-                    // Try to load video preview (if file is accessible)
-                    const videoPreview = document.getElementById('instantVideoPreview');
-                    videoPreview.style.display = 'block';
-                    document.getElementById('instantNoVideoPreview').style.display = 'none';
-                    // Note: In production, you'd need to serve the video file
+                    await loadInstantVideoPreview(downloadResponse.data.file);
                 }
                 
                 // Update preview with translated text
@@ -1561,6 +1631,64 @@
             updateInstantPreview();
         }
 
+        async function loadInstantVideoPreview(videoFile) {
+            try {
+                // Try to get video thumbnail
+                const thumbnailResponse = await axios.post('/api/get-video-thumbnail', {
+                    video_file: videoFile
+                });
+                
+                if (thumbnailResponse.data.success && thumbnailResponse.data.thumbnail_url) {
+                    const thumbnail = document.getElementById('instantVideoThumbnail');
+                    thumbnail.src = thumbnailResponse.data.thumbnail_url;
+                    thumbnail.style.display = 'block';
+                    document.getElementById('instantNoVideoPreview').style.display = 'none';
+                    
+                    // Detect aspect ratio
+                    thumbnail.onload = function() {
+                        const aspectRatio = this.naturalWidth / this.naturalHeight;
+                        const container = document.getElementById('instantVideoPreviewContainer');
+                        
+                        if (aspectRatio < 1) {
+                            // Portrait video
+                            container.classList.add('portrait');
+                            document.getElementById('aspectRatioText').textContent = '9:16 (عمودي)';
+                        } else {
+                            // Landscape video
+                            container.classList.remove('portrait');
+                            document.getElementById('aspectRatioText').textContent = '16:9 (عرضي)';
+                        }
+                        document.getElementById('instantVideoAspectRatio').style.display = 'block';
+                    };
+                } else {
+                    // Fallback: try to load video directly
+                    const videoPreview = document.getElementById('instantVideoPreview');
+                    if (videoFile.startsWith('http') || videoFile.startsWith('/')) {
+                        videoPreview.src = videoFile;
+                        videoPreview.style.display = 'block';
+                        document.getElementById('instantNoVideoPreview').style.display = 'none';
+                        
+                        videoPreview.onloadedmetadata = function() {
+                            const aspectRatio = this.videoWidth / this.videoHeight;
+                            const container = document.getElementById('instantVideoPreviewContainer');
+                            
+                            if (aspectRatio < 1) {
+                                container.classList.add('portrait');
+                                document.getElementById('aspectRatioText').textContent = '9:16 (عمودي)';
+                            } else {
+                                container.classList.remove('portrait');
+                                document.getElementById('aspectRatioText').textContent = '16:9 (عرضي)';
+                            }
+                            document.getElementById('instantVideoAspectRatio').style.display = 'block';
+                        };
+                    }
+                }
+            } catch (error) {
+                console.log('Could not load video preview:', error);
+                // Show placeholder
+            }
+        }
+
         function updateInstantPreview() {
             const preview = document.getElementById('instantSubtitlePreview');
             if (!preview) return;
@@ -1587,15 +1715,19 @@
             const a = bgOpacity / 255;
             preview.style.backgroundColor = `rgba(${r}, ${g}, ${b}, ${a})`;
             
-            // Update position
+            // Update position classes
+            preview.classList.remove('top', 'center', 'bottom');
+            preview.classList.add(instantSelectedPosition);
+            
+            // Update position styles
             if (instantSelectedPosition === 'top') {
-                preview.style.bottom = 'auto';
                 preview.style.top = '50px';
+                preview.style.bottom = 'auto';
                 preview.style.transform = 'translateX(-50%)';
             } else if (instantSelectedPosition === 'center') {
-                preview.style.bottom = '50%';
-                preview.style.top = 'auto';
-                preview.style.transform = 'translate(-50%, 50%)';
+                preview.style.top = '50%';
+                preview.style.bottom = 'auto';
+                preview.style.transform = 'translate(-50%, -50%)';
             } else {
                 preview.style.bottom = '50px';
                 preview.style.top = 'auto';
