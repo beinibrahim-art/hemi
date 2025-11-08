@@ -248,14 +248,15 @@ class VideoDownloader:
             'format_sort': ['res', 'ext:mp4:m4a', 'codec', 'size'],
         }
         
-        # إعدادات الجودة مع ضمان mp4 وجودة جيدة
+        # إعدادات الجودة - استخدام أفضل جودة متاحة بدون قيود صارمة
         if quality == 'best':
-            # أفضل جودة mp4 - دعم Mac و Windows (H.264/AVC1)
-            opts['format'] = 'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+            # أفضل جودة بدون قيود - للحصول على الجودة الأصلية الكاملة
+            # سيتم تحديد format في download() بناءً على ما هو متاح
+            opts.pop('format', None)  # إزالة أي format محدد مسبقاً
         elif quality == '720p' or quality == 'medium':
-            opts['format'] = 'bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best'
+            opts['format'] = 'bestvideo[height<=720]+bestaudio/best[height<=720]/best'
         elif quality == '480p' or quality == 'low':
-            opts['format'] = 'bestvideo[height<=480][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best'
+            opts['format'] = 'bestvideo[height<=480]+bestaudio/best[height<=480]/best'
         elif quality == 'audio':
             opts['format'] = 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio'
             opts['postprocessors'] = [{
@@ -264,8 +265,8 @@ class VideoDownloader:
                 'preferredquality': '192',
             }]
         else:
-            # معالجة تنسيقات أخرى مع fallback
-            opts['format'] = quality
+            # معالجة تنسيقات أخرى - سيتم تحديدها في download()
+            opts.pop('format', None)
         
         # إعدادات خاصة بمنصة TikTok - محسّنة لدعم For You
         if platform == 'tiktok':
@@ -359,13 +360,13 @@ class VideoDownloader:
                     else:
                         raise Exception(f"فشل تحميل فيديو TikTok: {error_msg}")
             
-            # لـ YouTube Shorts، استخدام إعدادات خاصة - محاولة clients متعددة
+            # لـ YouTube Shorts، استخدام إعدادات خاصة - محاولة clients متعددة للحصول على أفضل جودة
             if is_shorts:
-                logger.info("Detected YouTube Shorts - trying multiple clients")
-                # محاولة android أولاً لأنه يعمل غالباً مع Shorts
-                clients_to_try = ['android', 'ios', 'web']
+                logger.info("Detected YouTube Shorts - trying multiple clients for best quality")
+                # محاولة web أولاً للحصول على أفضل جودة، ثم android كـ fallback
+                clients_to_try = ['web', 'android', 'ios']
             else:
-                # لـ YouTube العادي، محاولة web أولاً ثم android
+                # لـ YouTube العادي، استخدام web للحصول على أفضل جودة
                 clients_to_try = ['web', 'android']
             
             # محاولة التحميل مع clients مختلفة
@@ -374,26 +375,26 @@ class VideoDownloader:
                 try:
                     logger.info(f"Trying with player_client: {client}")
                     
-                    # محاولة التحميل مع fallback للتنسيقات - تحسين لضمان mp4 وجودة جيدة
+                    # محاولة التحميل مع fallback للتنسيقات - استخدام أفضل جودة متاحة بدون قيود
                     formats_to_try = []
                     
                     # لـ YouTube Shorts، استخدام تنسيقات أبسط مع دعم SABR streaming
                     if is_shorts:
                         formats_to_try = [
-                            'best[height<=1080]/best[height<=720]/best[height<=480]/best',  # أي جودة متاحة
-                            'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',  # دمج فيديو وصوت
-                            'bestvideo+bestaudio/best',  # أفضل فيديو وصوت
-                            'best',  # أفضل تنسيق متاح
-                            'worst',  # أسوأ تنسيق (غالباً متاح)
-                            None  # بدون format محدد - yt-dlp سيختار تلقائياً
+                            'bestvideo+bestaudio/best',  # أفضل فيديو وصوت بدون قيود
+                            'best',  # أفضل تنسيق متاح بدون قيود
+                            'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',  # fallback مع قيود
+                            'worst',  # أسوأ تنسيق (fallback)
+                            None  # بدون format محدد
                         ]
                     elif quality == 'best':
+                        # أفضل جودة بدون قيود - للحصول على الجودة الأصلية الكاملة
                         formats_to_try = [
-                            'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best',  # 4K
-                            'bestvideo[height<=1440]+bestaudio/best[height<=1440]/best',  # 2K
-                            'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',  # Full HD
-                            'bestvideo+bestaudio/best',  # أفضل فيديو وصوت
-                            'best',  # أفضل تنسيق متاح
+                            'bestvideo+bestaudio/best',  # أفضل فيديو وصوت بدون قيود
+                            'best',  # أفضل تنسيق متاح بدون قيود
+                            'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best',  # 4K fallback
+                            'bestvideo[height<=1440]+bestaudio/best[height<=1440]/best',  # 2K fallback
+                            'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',  # Full HD fallback
                             'worst',  # أسوأ تنسيق (fallback)
                             None  # بدون format محدد
                         ]
@@ -414,18 +415,19 @@ class VideoDownloader:
                             None
                         ]
                     elif quality.startswith('1080p') or quality.startswith('1440p') or quality.startswith('2160p'):
-                        # دعم الجودات العالية
+                        # دعم الجودات العالية - بدون قيود للحصول على الجودة الأصلية
                         try:
                             height = int(quality.replace('p', ''))
                             formats_to_try = [
                                 f'bestvideo[height<={height}]+bestaudio/best[height<={height}]/best',
                                 f'bestvideo[height<={height}]/best[height<={height}]/best',
-                                'best',
+                                'bestvideo+bestaudio/best',  # أفضل بدون قيود
+                                'best',  # أفضل بدون قيود
                                 'worst',
                                 None
                             ]
                         except:
-                            formats_to_try = ['best', 'worst', None]
+                            formats_to_try = ['bestvideo+bestaudio/best', 'best', 'worst', None]
                     elif quality == 'audio':
                         formats_to_try = [
                             'bestaudio',
@@ -434,7 +436,7 @@ class VideoDownloader:
                         ]
                     else:
                         # محاولة استخدام quality مباشرة مع fallback
-                        formats_to_try = [quality, 'best', 'worst', None]
+                        formats_to_try = [quality, 'bestvideo+bestaudio/best', 'best', 'worst', None]
                     
                     for format_str in formats_to_try:
                         try:
@@ -798,10 +800,23 @@ class SubtitleProcessor:
         srt_content = []
         
         if segments:
-            for i, segment in enumerate(segments):
+            # استخدام segments مباشرة مع التأكد من عدم وجود تكرار
+            seen_segments = set()  # لتجنب التكرار
+            segment_counter = 1
+            
+            for segment in segments:
                 start_time = float(segment.get('start', 0))
                 end_time = float(segment.get('end', start_time + 3))
                 text_segment = segment.get('text', '').strip()
+                
+                if not text_segment:
+                    continue
+                
+                # تجنب التكرار بناءً على النص والتوقيت
+                segment_key = f"{start_time:.2f}-{end_time:.2f}-{text_segment[:50]}"
+                if segment_key in seen_segments:
+                    continue
+                seen_segments.add(segment_key)
                 
                 if end_time <= start_time:
                     end_time = start_time + 3.0
@@ -809,10 +824,12 @@ class SubtitleProcessor:
                 start_str = SubtitleProcessor.seconds_to_srt_time(start_time)
                 end_str = SubtitleProcessor.seconds_to_srt_time(end_time)
                 
-                srt_content.append(f"{i + 1}")
+                srt_content.append(f"{segment_counter}")
                 srt_content.append(f"{start_str} --> {end_str}")
                 srt_content.append(text_segment)
                 srt_content.append("")
+                
+                segment_counter += 1
             
             return '\n'.join(srt_content)
         
@@ -1586,11 +1603,21 @@ def api_instant_translate():
                 
                 # استخدام segments المترجمة فقط لإنشاء SRT
                 if segments_for_srt:
-                    logger.info(f"Creating SRT from {len(segments_for_srt)} translated segments")
+                    # إزالة التكرار قبل إنشاء SRT
+                    unique_segments = []
+                    seen_keys = set()
+                    
+                    for seg in segments_for_srt:
+                        seg_key = f"{seg['start']:.3f}-{seg['end']:.3f}-{seg['text'][:30]}"
+                        if seg_key not in seen_keys:
+                            seen_keys.add(seg_key)
+                            unique_segments.append(seg)
+                    
+                    logger.info(f"Creating SRT from {len(unique_segments)} unique translated segments (original: {len(segments_for_srt)})")
                     srt_content = SubtitleProcessor.create_srt(
                         '',  # نص فارغ - نستخدم segments فقط
                         duration=video_duration,
-                        segments=segments_for_srt
+                        segments=unique_segments
                     )
                 else:
                     # إذا لم تكن هناك segments، استخدم النص المترجم (fallback)
