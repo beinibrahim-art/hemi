@@ -2878,22 +2878,55 @@ def api_merge_subtitle():
         temp_video_path = Path(app.config['UPLOAD_FOLDER']) / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{video_filename}"
         temp_subtitle_path = Path(app.config['UPLOAD_FOLDER']) / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{subtitle_filename}"
         
+        # التأكد من وجود المجلد
+        temp_video_path.parent.mkdir(parents=True, exist_ok=True)
+        
         video_file.save(str(temp_video_path))
         subtitle_file.save(str(temp_subtitle_path))
         
-        # قراءة إعدادات الترجمة
+        # التأكد من وجود الملفات
+        if not temp_video_path.exists():
+            return jsonify({
+                'success': False,
+                'message': 'فشل حفظ ملف الفيديو'
+            }), 500
+        
+        if not temp_subtitle_path.exists():
+            return jsonify({
+                'success': False,
+                'message': 'فشل حفظ ملف الترجمة'
+            }), 500
+        
+        # قراءة إعدادات الترجمة مع معالجة آمنة
+        try:
+            fontSize = request.form.get('fontSize', request.form.get('font_size', 24))
+            fontSize = int(fontSize) if fontSize else 24
+        except:
+            fontSize = 24
+        
+        try:
+            bgOpacity = request.form.get('bgOpacity', request.form.get('bg_opacity', 180))
+            bgOpacity = int(bgOpacity) if bgOpacity else 180
+        except:
+            bgOpacity = 180
+        
         settings = {
-            'fontSize': int(request.form.get('fontSize', request.form.get('font_size', 24))),
-            'fontColor': request.form.get('fontColor', request.form.get('font_color', '#FFFFFF')),
-            'bgColor': request.form.get('bgColor', request.form.get('bg_color', '#000000')),
-            'bgOpacity': int(request.form.get('bgOpacity', request.form.get('bg_opacity', 180))),
-            'position': request.form.get('position', 'bottom'),
-            'fontFamily': request.form.get('fontFamily', request.form.get('font_name', 'Arial'))
+            'fontSize': fontSize,
+            'fontColor': str(request.form.get('fontColor', request.form.get('font_color', '#FFFFFF'))),
+            'bgColor': str(request.form.get('bgColor', request.form.get('bg_color', '#000000'))),
+            'bgOpacity': bgOpacity,
+            'position': str(request.form.get('position', 'bottom')),
+            'fontFamily': str(request.form.get('fontFamily', request.form.get('font_name', 'Arial')))
         }
         
         # دمج
         output_file = f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
         output_path = Path(app.config['OUTPUT_FOLDER']) / output_file
+        
+        # التأكد من وجود مجلد الإخراج
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"Merging subtitle: video={temp_video_path}, subtitle={temp_subtitle_path}, output={output_path}")
         
         success = VideoProcessor.merge_subtitles(
             str(temp_video_path),
@@ -2904,26 +2937,36 @@ def api_merge_subtitle():
         
         # حذف الملفات المؤقتة
         try:
-            temp_video_path.unlink()
-            temp_subtitle_path.unlink()
-        except:
-            pass
+            if temp_video_path.exists():
+                temp_video_path.unlink()
+            if temp_subtitle_path.exists():
+                temp_subtitle_path.unlink()
+        except Exception as e:
+            logger.warning(f"Could not delete temp files: {e}")
         
         if success:
-            return jsonify({
-                'success': True,
-                'download_url': f'/download/{output_file}'
-            })
+            if output_path.exists():
+                return jsonify({
+                    'success': True,
+                    'download_url': f'/download/{output_file}'
+                })
+            else:
+                logger.error(f"Merge succeeded but output file not found: {output_path}")
+                return jsonify({
+                    'success': False,
+                    'message': 'فشل إنشاء الفيديو النهائي'
+                }), 500
         else:
+            logger.error("merge_subtitles returned False")
             return jsonify({
                 'success': False,
-                'message': 'فشل دمج الترجمة'
+                'message': 'فشل دمج الترجمة مع الفيديو'
             }), 500
             
     except Exception as e:
         logger.error(f"Merge subtitle error: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
+        return jsonify({'success': False, 'message': f'خطأ في دمج الترجمة: {str(e)}'}), 500
 
 
 if __name__ == '__main__':
