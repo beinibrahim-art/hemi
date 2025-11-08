@@ -1990,6 +1990,19 @@ def api_transcribe():
         
         result = whisper_transcriber.transcribe(audio_file, model, language)
         
+        # إنشاء ملف SRT من segments
+        srt_file = None
+        if result.get('segments'):
+            segments = result.get('segments', [])
+            srt_content = SubtitleProcessor.create_srt(segments)
+            
+            if srt_content:
+                srt_filename = f"transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
+                srt_path = Path(app.config['SUBTITLE_FOLDER']) / srt_filename
+                SubtitleProcessor.save_srt_file(srt_content, srt_path)
+                srt_file = srt_filename
+                logger.info(f"Created SRT file: {srt_path}")
+        
         # حذف الملفات المؤقتة
         try:
             if audio_file != str(file_path):
@@ -2002,7 +2015,9 @@ def api_transcribe():
             'success': True,
             'text': result.get('text', ''),
             'language': result.get('language', language),
-            'segments': result.get('segments', [])
+            'segments': result.get('segments', []),
+            'srt_file': srt_file,
+            'srt_url': f'/download/{srt_file}' if srt_file else None
         })
     
     except Exception as e:
@@ -2074,6 +2089,19 @@ def api_transcribe_from_url():
         # التحويل إلى نص
         result = whisper_transcriber.transcribe(audio_file, model, language)
         
+        # إنشاء ملف SRT من segments
+        srt_file = None
+        if result.get('segments'):
+            segments = result.get('segments', [])
+            srt_content = SubtitleProcessor.create_srt(segments)
+            
+            if srt_content:
+                srt_filename = f"transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
+                srt_path = Path(app.config['SUBTITLE_FOLDER']) / srt_filename
+                SubtitleProcessor.save_srt_file(srt_content, srt_path)
+                srt_file = srt_filename
+                logger.info(f"Created SRT file: {srt_path}")
+        
         # حذف الملفات المؤقتة
         try:
             os.remove(audio_file)
@@ -2084,7 +2112,9 @@ def api_transcribe_from_url():
             'success': True,
             'text': result.get('text', ''),
             'language': result.get('language', language),
-            'segments': result.get('segments', [])
+            'segments': result.get('segments', []),
+            'srt_file': srt_file,
+            'srt_url': f'/download/{srt_file}' if srt_file else None
         })
     
     except Exception as e:

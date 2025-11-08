@@ -2595,24 +2595,38 @@
                 
                 if (response.data.success) {
                     const resultDiv = document.getElementById('transcribeResult');
+                    const srtUrl = response.data.srt_url || (response.data.srt_file ? `/download/${response.data.srt_file}` : null);
+                    const hasSegments = response.data.segments && response.data.segments.length > 0;
+                    
                     resultDiv.innerHTML = `
                         <div class="glass-strong rounded-xl p-6">
                             <h4 class="text-green-400 font-bold mb-4"><i class="bi bi-check-circle-fill"></i> تم التحويل بنجاح!</h4>
                             <div class="mb-4">
                                 <label class="block text-sm font-semibold mb-2">النص المحول:</label>
-                                <textarea class="input-glass w-full px-4 py-3 rounded-xl" rows="10" readonly>${response.data.text}</textarea>
+                                <textarea class="input-glass w-full px-4 py-3 rounded-xl" rows="10" readonly>${response.data.text || ''}</textarea>
                             </div>
-                            <div class="flex gap-3">
-                                ${response.data.srt_file ? `<a href="/download/subtitle/${response.data.srt_file}" class="btn-primary-glass px-6 py-3 rounded-xl font-semibold">
+                            ${hasSegments ? `<div class="mb-4 text-sm text-gray-400">
+                                <i class="bi bi-info-circle"></i> تم اكتشاف ${response.data.segments.length} مقطع مع التوقيتات
+                            </div>` : ''}
+                            <div class="flex gap-3 flex-wrap">
+                                ${srtUrl ? `<a href="${srtUrl}" class="btn-primary-glass px-6 py-3 rounded-xl font-semibold" download>
                                     <i class="bi bi-download"></i> تحميل ملف SRT
                                 </a>` : ''}
-                                <button class="btn-glass px-6 py-3 rounded-xl font-semibold" onclick="copyText('${escapeText(response.data.text)}')">
+                                <button class="btn-glass px-6 py-3 rounded-xl font-semibold" onclick="copyText('${escapeText(response.data.text || '')}')">
                                     <i class="bi bi-clipboard"></i> نسخ النص
                                 </button>
+                                ${response.data.text ? `<button class="btn-glass px-6 py-3 rounded-xl font-semibold" onclick="translateTranscribedText('${escapeText(response.data.text)}')">
+                                    <i class="bi bi-translate"></i> ترجمة النص
+                                </button>` : ''}
                             </div>
                         </div>
                     `;
                     resultDiv.classList.remove('hidden');
+                    
+                    // حفظ segments للاستخدام لاحقاً
+                    if (response.data.segments) {
+                        window.transcribeSegments = response.data.segments;
+                    }
                 } else {
                     showAlert(response.data.message, 'danger');
                 }
@@ -2734,6 +2748,34 @@
             }).catch(() => {
                 showAlert('فشل نسخ النص', 'danger');
             });
+        };
+        
+        window.translateTranscribedText = async function(text) {
+            if (!text) {
+                showAlert('لا يوجد نص للترجمة', 'warning');
+                return;
+            }
+            
+            // الانتقال إلى تبويب الترجمة
+            const translateTab = document.getElementById('translate-tab');
+            const translateButton = document.querySelector('[data-tab="translate"]');
+            
+            if (translateButton) {
+                translateButton.click();
+            }
+            
+            // إدخال النص في حقل الترجمة
+            const translateInput = document.getElementById('translateTextInput');
+            if (translateInput) {
+                translateInput.value = text;
+            }
+            
+            // بدء الترجمة تلقائياً
+            setTimeout(() => {
+                if (typeof window.startTranslate === 'function') {
+                    window.startTranslate();
+                }
+            }, 500);
         };
 
         function escapeText(text) {
