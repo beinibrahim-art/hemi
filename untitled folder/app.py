@@ -444,6 +444,11 @@ class VideoProcessor:
                        output_path: str, settings: Dict) -> bool:
         """دمج الترجمة مع الفيديو"""
         try:
+            # التأكد من أن المسارات مطلقة
+            video_path = str(Path(video_path).resolve())
+            subtitle_path = str(Path(subtitle_path).resolve())
+            output_path = str(Path(output_path).resolve())
+            
             # إنشاء ملف ASS
             if subtitle_path.endswith('.srt'):
                 with open(subtitle_path, 'r', encoding='utf-8') as f:
@@ -455,13 +460,26 @@ class VideoProcessor:
                 with open(ass_path, 'w', encoding='utf-8') as f:
                     f.write(ass_content)
                 
-                subtitle_path = ass_path
+                subtitle_path = str(Path(ass_path).resolve())
+            
+            # Escape المسار للـ ffmpeg
+            # المشكلة: f-string يحاول تفسير أحرف خاصة في المسار
+            # الحل: استخدام string concatenation بدلاً من f-string
+            import platform
+            if platform.system() == 'Windows':
+                subtitle_path_escaped = subtitle_path.replace('\\', '/').replace(':', '\\:')
+            else:
+                # على Linux/Mac، escape المسافات والأحرف الخاصة
+                subtitle_path_escaped = subtitle_path.replace('\\', '\\\\').replace(' ', '\\ ')
             
             # دمج مع الفيديو
+            # استخدام string concatenation لتجنب مشاكل f-string
+            vf_filter = 'ass=' + subtitle_path_escaped
+            
             cmd = [
                 'ffmpeg',
                 '-i', video_path,
-                '-vf', f"ass={subtitle_path}",
+                '-vf', vf_filter,
                 '-c:a', 'copy',
                 '-c:v', 'libx264',
                 '-preset', 'fast',
@@ -471,11 +489,19 @@ class VideoProcessor:
                 output_path
             ]
             
-            process = subprocess.run(cmd, capture_output=True, timeout=600)
-            return process.returncode == 0
+            logger.info(f"Running ffmpeg command: {' '.join(cmd)}")
+            
+            process = subprocess.run(cmd, capture_output=True, timeout=600, text=True)
+            
+            if process.returncode != 0:
+                logger.error(f"FFmpeg error: {process.stderr}")
+                return False
+            
+            return True
             
         except Exception as e:
             logger.error(f"Subtitle merge failed: {e}")
+            logger.error(traceback.format_exc())
             return False
 
 
