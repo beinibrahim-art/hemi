@@ -16,6 +16,9 @@ import json
 import logging
 import subprocess
 import traceback
+import re
+import secrets
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional, List
@@ -600,9 +603,6 @@ class SmartMediaDownloader:
         }
         
         try:
-            import secrets
-            import threading
-            
             # تحويل quality إلى format command
             format_command = quality
             is_audio = (quality == 'audio')
@@ -895,7 +895,6 @@ class SubtitleProcessor:
         duration = end_time - start_time
         
         # تقسيم على علامات التوقف الطبيعية
-        import re
         # تقسيم على علامات التوقف مع الاحتفاظ بها
         sentences = re.split(r'([.!?،؛]\s*)', text)
         
