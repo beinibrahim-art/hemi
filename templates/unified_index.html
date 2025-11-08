@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>محمل الوسائط + تحويل الصوت إلى نص</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #eee;
+        }
+        .tab {
+            padding: 15px 30px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 18px;
+            color: #666;
+            transition: all 0.3s;
+        }
+        .tab.active {
+            color: #667eea;
+            border-bottom: 3px solid #667eea;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .input-group {
+            margin-bottom: 20px;
+        }
+        input[type="text"], input[type="url"] {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            font-size: 16px;
+        }
+        button {
+            padding: 15px 30px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        .progress {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 10px;
+            display: none;
+        }
+        .progress.active {
+            display: block;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #ddd;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            width: 0%;
+            transition: width 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎬 محمل الوسائط + تحويل الصوت إلى نص</h1>
+        
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('download')">تحميل الوسائط</button>
+            <button class="tab" onclick="showTab('transcribe')">تحويل إلى نص</button>
+        </div>
+        
+        <div id="download-tab" class="tab-content active">
+            <div class="input-group">
+                <input type="url" id="media-url" placeholder="أدخل رابط الفيديو (YouTube, Twitter, Instagram, TikTok...)">
+            </div>
+            <button onclick="analyzeUrl()">تحليل الرابط</button>
+            <div id="formats-container"></div>
+            <div id="download-progress" class="progress">
+                <div id="progress-text"></div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div id="transcribe-tab" class="tab-content">
+            <p>ميزة التحويل إلى نص قيد التطوير...</p>
+        </div>
+    </div>
+    
+    <script>
+        function showTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById(tabName + '-tab').classList.add('active');
+        }
+        
+        async function analyzeUrl() {
+            const url = document.getElementById('media-url').value;
+            if (!url) {
+                alert('يرجى إدخال رابط');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/media/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({url: url})
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    displayFormats(data);
+                } else {
+                    alert('خطأ: ' + data.error);
+                }
+            } catch (error) {
+                alert('خطأ في الاتصال: ' + error.message);
+            }
+        }
+        
+        function displayFormats(data) {
+            const container = document.getElementById('formats-container');
+            let html = '<h3>الجودات المتاحة:</h3>';
+            
+            if (data.formats.presets) {
+                html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 20px;">';
+                data.formats.presets.forEach(preset => {
+                    html += `
+                        <button onclick="downloadMedia('${preset.command}', ${preset.id === 'audio'})" 
+                                style="padding: 20px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; border-radius: 10px; cursor: pointer;">
+                            <strong>${preset.name}</strong><br>
+                            <small>${preset.description}</small>
+                        </button>
+                    `;
+                });
+                html += '</div>';
+            }
+            
+            container.innerHTML = html;
+        }
+        
+        async function downloadMedia(formatCommand, isAudio) {
+            const url = document.getElementById('media-url').value;
+            const progressDiv = document.getElementById('download-progress');
+            const progressText = document.getElementById('progress-text');
+            const progressFill = document.getElementById('progress-fill');
+            
+            progressDiv.classList.add('active');
+            progressText.textContent = 'بدء التحميل...';
+            
+            try {
+                const response = await fetch('/api/media/download', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        url: url,
+                        format: formatCommand,
+                        audio_only: isAudio
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    checkProgress(data.download_id);
+                } else {
+                    alert('خطأ في بدء التحميل');
+                }
+            } catch (error) {
+                alert('خطأ: ' + error.message);
+            }
+        }
+        
+        function checkProgress(downloadId) {
+            const interval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/media/progress/${downloadId}`);
+                    const data = await response.json();
+                    
+                    document.getElementById('progress-text').textContent = 
+                        `${data.method || 'جارٍ التحميل...'} - ${data.percent || '0%'}`;
+                    
+                    const percent = parseInt(data.percent) || 0;
+                    document.getElementById('progress-fill').style.width = percent + '%';
+                    
+                    if (data.status === 'completed') {
+                        clearInterval(interval);
+                        alert('تم التحميل بنجاح!');
+                    } else if (data.status === 'error') {
+                        clearInterval(interval);
+                        alert('خطأ: ' + (data.message || data.error));
+                    }
+                } catch (error) {
+                    console.error('Error checking progress:', error);
+                }
+            }, 1000);
+        }
+    </script>
+</body>
+</html>
