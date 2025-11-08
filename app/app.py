@@ -256,12 +256,24 @@ class VideoDownloader:
             # معالجة تنسيقات أخرى مع fallback
             opts['format'] = quality
         
-        # إعدادات خاصة بمنصة TikTok
+        # إعدادات خاصة بمنصة TikTok - محسّنة لدعم For You
         if platform == 'tiktok':
             opts['http_headers'] = {
-                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15',
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
                 'Referer': 'https://www.tiktok.com/',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
             }
+            # إضافة extractor args محسّنة لـ TikTok
+            opts['extractor_args'] = {
+                'tiktok': {
+                    'webpage_download': True,
+                }
+            }
+            # تحسين format selection لـ TikTok
+            if quality != 'audio':
+                opts['format'] = 'best[ext=mp4]/best'
         
         return opts
     
@@ -277,6 +289,64 @@ class VideoDownloader:
         try:
             platform = self.detect_platform(url)
             is_shorts = self.is_youtube_shorts(url)
+            
+            # إعدادات خاصة لـ TikTok
+            if platform == 'tiktok':
+                logger.info("Detected TikTok - using optimized settings")
+                # لـ TikTok، استخدام format بسيط
+                ydl_opts = self.get_ydl_opts(platform, quality, player_client='web')
+                if quality == 'best':
+                    ydl_opts['format'] = 'best[ext=mp4]/best'
+                elif quality == 'audio':
+                    ydl_opts['format'] = 'bestaudio'
+                else:
+                    # محاولة جودة محددة
+                    try:
+                        height = int(quality.replace('p', ''))
+                        ydl_opts['format'] = f'best[height<={height}][ext=mp4]/best[height<={height}]/best'
+                    except:
+                        ydl_opts['format'] = 'best[ext=mp4]/best'
+                
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        if not info:
+                            raise Exception("لم يتم العثور على معلومات الفيديو")
+                        
+                        ydl.download([url])
+                        
+                        # البحث عن الملف المحمّل
+                        title = info.get('title', 'video')
+                        ext = info.get('ext', 'mp4') or 'mp4'
+                        filename = f"{title}.{ext}"
+                        filepath = os.path.join(app.config['DOWNLOAD_FOLDER'], filename)
+                        
+                        if os.path.exists(filepath):
+                            result['success'] = True
+                            result['file'] = filepath
+                            result['info'] = info
+                            logger.info(f"Successfully downloaded TikTok video: {filename}")
+                            return result
+                        else:
+                            # البحث عن ملفات أخرى
+                            for file in os.listdir(app.config['DOWNLOAD_FOLDER']):
+                                if file.startswith(title[:20]) or title[:20] in file:
+                                    result['success'] = True
+                                    result['file'] = os.path.join(app.config['DOWNLOAD_FOLDER'], file)
+                                    result['info'] = info
+                                    logger.info(f"Found TikTok video file: {file}")
+                                    return result
+                            
+                            raise Exception("تم التحميل لكن لم يتم العثور على الملف")
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.error(f"TikTok download error: {e}")
+                    if 'private' in error_msg.lower() or 'unavailable' in error_msg.lower():
+                        raise Exception("هذا الفيديو غير متاح أو خاص. يرجى التأكد من أن الرابط صحيح.")
+                    elif 'age' in error_msg.lower() or 'restricted' in error_msg.lower():
+                        raise Exception("هذا الفيديو مقيد بالعمر أو غير متاح في منطقتك.")
+                    else:
+                        raise Exception(f"فشل تحميل فيديو TikTok: {error_msg}")
             
             # لـ YouTube Shorts، استخدام إعدادات خاصة
             if is_shorts:
@@ -1611,7 +1681,7 @@ def api_storage_info():
 
 @app.route('/api/get-qualities', methods=['POST'])
 def api_get_qualities():
-    """الحصول على الجودات المتاحة للفيديو"""
+    """الحصول على الجودات المتاحة للفيديو - نسخة محسّنة واحترافية"""
     try:
         data = request.json
         url = data.get('url')
@@ -1619,19 +1689,45 @@ def api_get_qualities():
         if not url:
             return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
         
+        platform = VideoDownloader().detect_platform(url)
+        logger.info(f"Platform detected: {platform} for URL: {url}")
+        
         try:
-            # استخدام إعدادات بسيطة وسريعة
+            # إعدادات محسّنة لكل منصة
             ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
+                'quiet': False,
+                'no_warnings': False,
                 'extract_flat': False,
-                'socket_timeout': 15,  # تقليل timeout لتسريع العملية
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['web'],  # استخدام web فقط لتسريع العملية
-                    }
-                },
+                'socket_timeout': 30,
+                'nocheckcertificate': True,
+                'geo_bypass': True,
             }
+            
+            # إعدادات خاصة بكل منصة
+            if platform == 'tiktok':
+                ydl_opts['http_headers'] = {
+                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+                    'Referer': 'https://www.tiktok.com/',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate',
+                }
+                ydl_opts['extractor_args'] = {
+                    'tiktok': {
+                        'webpage_download': True,
+                    }
+                }
+            elif platform == 'youtube':
+                # محاولة عدة clients للحصول على جميع الجودات
+                ydl_opts['extractor_args'] = {
+                    'youtube': {
+                        'player_client': ['android', 'ios', 'web'],  # محاولة جميع clients
+                    }
+                }
+            elif platform == 'instagram':
+                ydl_opts['http_headers'] = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -1640,85 +1736,192 @@ def api_get_qualities():
                     raise Exception("لم يتم العثور على معلومات الفيديو")
                 
                 formats = info.get('formats', [])
-                qualities = []
+                logger.info(f"Found {len(formats)} formats for {platform}")
                 
-                # تجميع الجودات المتاحة
-                seen_qualities = set()
+                qualities = []
+                seen_qualities = {}
+                
+                # معالجة شاملة لجميع التنسيقات
+                video_formats = []
+                audio_formats = []
                 
                 for fmt in formats:
-                    height = fmt.get('height')
-                    ext = fmt.get('ext', 'mp4')
                     format_id = fmt.get('format_id', '')
+                    height = fmt.get('height')
+                    width = fmt.get('width')
                     vcodec = fmt.get('vcodec', 'none')
                     acodec = fmt.get('acodec', 'none')
+                    ext = fmt.get('ext', 'mp4')
+                    filesize = fmt.get('filesize') or fmt.get('filesize_approx', 0)
+                    fps = fmt.get('fps', 0)
+                    tbr = fmt.get('tbr', 0)  # معدل البت
+                    vbr = fmt.get('vbr', 0)
+                    abr = fmt.get('abr', 0)
                     
-                    # تخطي الصوت فقط إذا كان هناك فيديو
-                    if vcodec == 'none' and acodec != 'none':
-                        if 'audio' not in seen_qualities:
-                            qualities.append({
-                                'id': 'audio',
-                                'label': 'صوت فقط',
-                                'ext': ext if ext else 'mp3',
-                                'height': None,
-                                'format_id': format_id
-                            })
-                            seen_qualities.add('audio')
+                    # فصل الفيديو والصوت
+                    if vcodec != 'none' and acodec != 'none':
+                        video_formats.append({
+                            'format_id': format_id,
+                            'height': height,
+                            'width': width,
+                            'ext': ext,
+                            'vcodec': vcodec,
+                            'acodec': acodec,
+                            'filesize': filesize,
+                            'fps': fps,
+                            'tbr': tbr,
+                            'vbr': vbr,
+                            'abr': abr,
+                            'format_note': fmt.get('format_note', ''),
+                            'quality': fmt.get('quality', 0),
+                        })
+                    
+                    if acodec != 'none' and vcodec == 'none':
+                        audio_formats.append({
+                            'format_id': format_id,
+                            'ext': ext,
+                            'acodec': acodec,
+                            'filesize': filesize,
+                            'abr': abr,
+                        })
+                
+                # تجميع جودات الفيديو
+                for fmt in sorted(video_formats, key=lambda x: (x.get('height') or 0, x.get('tbr') or 0), reverse=True):
+                    height = fmt.get('height')
+                    if not height:
                         continue
                     
-                    if height and vcodec != 'none':
-                        quality_key = f"{height}p"
-                        if quality_key not in seen_qualities:
-                            qualities.append({
-                                'id': quality_key.lower(),
-                                'label': f'{height}p',
-                                'ext': ext if ext else 'mp4',
-                                'height': height,
-                                'format_id': format_id
-                            })
-                            seen_qualities.add(quality_key)
+                    quality_key = f"{height}p"
+                    
+                    # تجنب التكرار - نأخذ أفضل تنسيق لكل جودة
+                    if quality_key not in seen_qualities:
+                        filesize_mb = (fmt.get('filesize') or 0) / (1024 * 1024)
+                        bitrate = fmt.get('tbr') or fmt.get('vbr') or 0
+                        
+                        # تحديد التسمية بناءً على الجودة
+                        if height >= 2160:
+                            label = f'4K ({height}p)'
+                        elif height >= 1440:
+                            label = f'2K ({height}p)'
+                        elif height >= 1080:
+                            label = f'Full HD ({height}p)'
+                        elif height >= 720:
+                            label = f'HD ({height}p)'
+                        elif height >= 480:
+                            label = f'SD ({height}p)'
+                        else:
+                            label = f'{height}p'
+                        
+                        # إضافة معلومات إضافية
+                        info_text = []
+                        if filesize_mb > 0:
+                            info_text.append(f"{filesize_mb:.1f} MB")
+                        if bitrate > 0:
+                            info_text.append(f"{int(bitrate)} kbps")
+                        if fmt.get('fps', 0) > 0:
+                            info_text.append(f"{int(fmt['fps'])} fps")
+                        
+                        qualities.append({
+                            'id': quality_key.lower(),
+                            'label': label,
+                            'ext': fmt.get('ext', 'mp4'),
+                            'height': height,
+                            'width': fmt.get('width'),
+                            'format_id': fmt.get('format_id'),
+                            'filesize_mb': round(filesize_mb, 2) if filesize_mb > 0 else None,
+                            'bitrate': int(bitrate) if bitrate > 0 else None,
+                            'fps': int(fmt.get('fps', 0)) if fmt.get('fps', 0) > 0 else None,
+                            'info': ' • '.join(info_text) if info_text else None,
+                            'vcodec': fmt.get('vcodec', ''),
+                        })
+                        seen_qualities[quality_key] = True
                 
-                # إضافة خيارات افتراضية إذا لم يتم العثور على جودات
-                if not qualities:
-                    qualities = [
-                        {'id': 'best', 'label': 'أفضل جودة', 'ext': 'mp4', 'height': None, 'format_id': 'best'},
-                        {'id': 'medium', 'label': 'جودة متوسطة', 'ext': 'mp4', 'height': 720, 'format_id': 'medium'},
-                        {'id': 'low', 'label': 'جودة منخفضة', 'ext': 'mp4', 'height': 480, 'format_id': 'low'},
-                        {'id': 'audio', 'label': 'صوت فقط', 'ext': 'mp3', 'height': None, 'format_id': 'audio'}
-                    ]
-                else:
-                    # إضافة خيار "أفضل جودة" في البداية
+                # إضافة أفضل جودة صوت
+                if audio_formats:
+                    best_audio = max(audio_formats, key=lambda x: x.get('abr', 0))
+                    filesize_mb = (best_audio.get('filesize') or 0) / (1024 * 1024)
+                    abr = best_audio.get('abr', 0)
+                    
+                    info_text = []
+                    if filesize_mb > 0:
+                        info_text.append(f"{filesize_mb:.1f} MB")
+                    if abr > 0:
+                        info_text.append(f"{int(abr)} kbps")
+                    
+                    qualities.append({
+                        'id': 'audio',
+                        'label': 'صوت فقط',
+                        'ext': best_audio.get('ext', 'mp3'),
+                        'height': None,
+                        'format_id': best_audio.get('format_id'),
+                        'filesize_mb': round(filesize_mb, 2) if filesize_mb > 0 else None,
+                        'bitrate': int(abr) if abr > 0 else None,
+                        'info': ' • '.join(info_text) if info_text else None,
+                    })
+                
+                # إضافة خيار "أفضل جودة" في البداية
+                if qualities:
                     qualities.insert(0, {
                         'id': 'best',
-                        'label': 'أفضل جودة',
+                        'label': '⭐ أفضل جودة متاحة',
                         'ext': 'mp4',
                         'height': None,
-                        'format_id': 'best'
+                        'format_id': 'best',
+                        'info': 'سيتم اختيار أفضل جودة تلقائياً'
                     })
+                else:
+                    # إذا لم يتم العثور على جودات، استخدم الافتراضية
+                    qualities = [
+                        {'id': 'best', 'label': '⭐ أفضل جودة', 'ext': 'mp4', 'info': 'جودة افتراضية'},
+                        {'id': 'medium', 'label': 'HD (720p)', 'ext': 'mp4', 'height': 720, 'info': 'جودة متوسطة'},
+                        {'id': 'low', 'label': 'SD (480p)', 'ext': 'mp4', 'height': 480, 'info': 'جودة منخفضة'},
+                        {'id': 'audio', 'label': 'صوت فقط', 'ext': 'mp3', 'info': 'صوت فقط'}
+                    ]
                 
                 return jsonify({
                     'success': True,
                     'qualities': qualities,
                     'title': info.get('title', 'Unknown'),
-                    'duration': info.get('duration', 0)
+                    'duration': info.get('duration', 0),
+                    'thumbnail': info.get('thumbnail') or info.get('thumbnails', [{}])[0].get('url', '') if info.get('thumbnails') else '',
+                    'view_count': info.get('view_count', 0),
+                    'platform': platform,
+                    'formats_count': len(formats)
                 })
         
-        except Exception as e:
-            logger.error(f"Get qualities error: {e}")
-            # إرجاع جودات افتراضية في حالة الخطأ
+        except yt_dlp.utils.DownloadError as e:
+            error_msg = str(e)
+            logger.error(f"yt-dlp error: {error_msg}")
+            
+            # محاولة إرجاع جودات افتراضية
             return jsonify({
                 'success': True,
                 'qualities': [
-                    {'id': 'best', 'label': 'أفضل جودة', 'ext': 'mp4'},
-                    {'id': 'medium', 'label': 'جودة متوسطة', 'ext': 'mp4'},
-                    {'id': 'low', 'label': 'جودة منخفضة', 'ext': 'mp4'},
+                    {'id': 'best', 'label': '⭐ أفضل جودة', 'ext': 'mp4', 'info': 'سيتم المحاولة'},
+                    {'id': 'medium', 'label': 'HD (720p)', 'ext': 'mp4', 'height': 720},
+                    {'id': 'low', 'label': 'SD (480p)', 'ext': 'mp4', 'height': 480},
                     {'id': 'audio', 'label': 'صوت فقط', 'ext': 'mp3'}
                 ],
-                'message': f'تم استخدام جودات افتراضية: {str(e)}'
+                'message': f'تم استخدام جودات افتراضية. قد تحتاج إلى تحديث yt-dlp: pip install -U yt-dlp'
             })
+        except Exception as e:
+            logger.error(f"Get qualities error: {e}")
+            logger.error(traceback.format_exc())
+            raise
     
     except Exception as e:
         logger.error(f"Get qualities API error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False, 
+            'message': f'خطأ في فحص الجودات: {str(e)}',
+            'qualities': [
+                {'id': 'best', 'label': '⭐ أفضل جودة', 'ext': 'mp4'},
+                {'id': 'medium', 'label': 'HD (720p)', 'ext': 'mp4'},
+                {'id': 'low', 'label': 'SD (480p)', 'ext': 'mp4'},
+                {'id': 'audio', 'label': 'صوت فقط', 'ext': 'mp3'}
+            ]
+        }), 500
 
 
 @app.route('/api/cleanup', methods=['POST'])

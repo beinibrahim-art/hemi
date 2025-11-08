@@ -1890,31 +1890,48 @@
             
             if (!qualities || qualities.length === 0) {
                 qualities = [
-                    { id: 'best', label: 'أفضل جودة', ext: 'mp4' },
-                    { id: 'medium', label: 'جودة متوسطة', ext: 'mp4' },
-                    { id: 'low', label: 'جودة منخفضة', ext: 'mp4' },
-                    { id: 'audio', label: 'صوت فقط', ext: 'mp3' }
+                    { id: 'best', label: '⭐ أفضل جودة', ext: 'mp4', info: 'جودة افتراضية' },
+                    { id: 'medium', label: 'HD (720p)', ext: 'mp4', height: 720, info: 'جودة متوسطة' },
+                    { id: 'low', label: 'SD (480p)', ext: 'mp4', height: 480, info: 'جودة منخفضة' },
+                    { id: 'audio', label: 'صوت فقط', ext: 'mp3', info: 'صوت فقط' }
                 ];
             }
             
             qualities.forEach(quality => {
                 const option = document.createElement('div');
-                option.className = 'quality-card-glass rounded-xl p-4 text-center cursor-pointer';
+                option.className = 'quality-card-glass rounded-xl p-4 text-center cursor-pointer transition-all hover:scale-105';
                 option.dataset.quality = quality.id;
                 
                 if (quality.id === selectedQuality) {
-                    option.classList.add('selected');
+                    option.classList.add('selected', 'ring-2', 'ring-purple-400');
                 }
                 
                 let icon = '📹';
                 if (quality.id === 'audio' || quality.ext === 'mp3') {
                     icon = '🎵';
+                } else if (quality.id === 'best') {
+                    icon = '⭐';
+                }
+                
+                // بناء HTML مع معلومات إضافية
+                let infoHtml = '';
+                if (quality.info) {
+                    infoHtml = `<div class="text-xs text-gray-400 mt-1">${quality.info}</div>`;
+                } else if (quality.filesize_mb || quality.bitrate) {
+                    const infoParts = [];
+                    if (quality.filesize_mb) infoParts.push(`${quality.filesize_mb} MB`);
+                    if (quality.bitrate) infoParts.push(`${quality.bitrate} kbps`);
+                    if (quality.fps) infoParts.push(`${quality.fps} fps`);
+                    if (infoParts.length > 0) {
+                        infoHtml = `<div class="text-xs text-gray-400 mt-1">${infoParts.join(' • ')}</div>`;
+                    }
                 }
                 
                 option.innerHTML = `
                     <div class="text-3xl mb-2">${icon}</div>
-                    <div class="font-bold">${quality.label}</div>
-                    <div class="text-xs text-gray-400">${quality.ext ? quality.ext.toUpperCase() : 'MP4'}</div>
+                    <div class="font-bold text-sm">${quality.label}</div>
+                    <div class="text-xs text-gray-400 mt-1">${quality.ext ? quality.ext.toUpperCase() : 'MP4'}</div>
+                    ${infoHtml}
                 `;
                 
                 option.onclick = () => {
