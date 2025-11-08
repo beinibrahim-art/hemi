@@ -888,6 +888,412 @@ class SmartMediaDownloader:
         return opts
 
 
+class UnifiedDownloadManager:
+    """
+    مدير التحميل الموحد - نقطة مركزية واحدة لجميع عمليات التحميل
+    يدعم: فيديو، صوت، تفريغ نصي
+    """
+    
+    # Quality presets mapping - قابل للتوسع بسهولة
+    QUALITY_PRESETS = {
+        'auto': 'bestvideo+bestaudio/best',
+        'best': 'bestvideo+bestaudio/best',
+        '4k': 'bestvideo[height<=2160]+bestaudio/best[height<=2160]',
+        '2160p': 'bestvideo[height<=2160]+bestaudio/best[height<=2160]',
+        '1440p': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]',
+        '1080p': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]',
+        '720p': 'bestvideo[height<=720]+bestaudio/best[height<=720]',
+        '480p': 'bestvideo[height<=480]+bestaudio/best[height<=480]',
+        '360p': 'bestvideo[height<=360]+bestaudio/best[height<=360]',
+        'audio': 'audio',
+        'audio_best': 'bestaudio/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio'
+    }
+    
+    # Media types
+    MEDIA_TYPE_VIDEO = 'video'
+    MEDIA_TYPE_AUDIO = 'audio'
+    MEDIA_TYPE_TRANSCRIBE = 'transcribe'  # تحميل + تفريغ نصي
+    
+    def __init__(self, output_dir: str = None):
+        """تهيئة المدير الموحد"""
+        if output_dir is None:
+            output_dir = app.config.get('DOWNLOAD_FOLDER', 'downloads')
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True)
+        
+        # استخدام SmartMediaDownloader كـ backend
+        self.downloader = SmartMediaDownloader(output_dir)
+        
+        # تتبع التقدم - بنية موحدة
+        self.progress_tracker = {}
+    
+    def start_download(self, url: str, quality: str = 'auto', 
+                      media_type: str = MEDIA_TYPE_VIDEO, 
+                      options: dict = None) -> dict:
+        """
+        بدء عملية التحميل - الدالة الأساسية الأولى
+        
+        Args:
+            url: رابط الوسائط
+            quality: الجودة (auto, best, 4k, 1080p, 720p, 480p, audio, etc.)
+            media_type: نوع الوسائط (video, audio, transcribe)
+            options: خيارات إضافية (language, model_size, etc.)
+        
+        Returns:
+            dict: {'success': bool, 'download_id': str, 'message': str}
+        """
+        if not url:
+            return {
+                'success': False,
+                'error': 'No URL provided',
+                'message': 'الرجاء إدخال رابط'
+            }
+        
+        # توليد معرف فريد للتحميل
+        download_id = secrets.token_hex(8)
+        
+        # تحويل quality إلى format command
+        format_command = self._quality_to_format(quality, media_type)
+        
+        # تحديد نوع التحميل
+        is_audio = (media_type == self.MEDIA_TYPE_AUDIO) or (quality == 'audio')
+        
+        # تهيئة تتبع التقدم
+        self.progress_tracker[download_id] = {
+            'status': 'starting',
+            'percent': '0%',
+            'message': 'بدء التحميل...',
+            'url': url,
+            'quality': quality,
+            'media_type': media_type,
+            'format_command': format_command,
+            'options': options or {},
+            'started_at': datetime.now().isoformat(),
+            'file': None,
+            'error': None
+        }
+        
+        # بدء التحميل في thread منفصل (غير متزامن)
+        thread = threading.Thread(
+            target=self._execute_download_worker,
+            args=(download_id, url, format_command, is_audio, media_type, options)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        return {
+            'success': True,
+            'download_id': download_id,
+            'message': 'تم بدء التحميل',
+            'status': 'started'
+        }
+    
+    def _execute_download_worker(self, download_id: str, url: str, 
+                                 format_command: str, is_audio: bool,
+                                 media_type: str, options: dict):
+        """
+        عامل التحميل - يتم تنفيذه في thread منفصل
+        يستدعي execute_download للتنفيذ الفعلي
+        """
+        try:
+            result = self.execute_download(
+                download_id=download_id,
+                url=url,
+                format_command=format_command,
+                is_audio=is_audio,
+                media_type=media_type,
+                options=options or {}
+            )
+            
+            # تحديث التقدم النهائي
+            if result['success']:
+                self.progress_tracker[download_id].update({
+                    'status': 'completed',
+                    'percent': '100%',
+                    'message': 'تم التحميل بنجاح!',
+                    'file': result.get('file'),
+                    'completed_at': datetime.now().isoformat()
+                })
+            else:
+                self.progress_tracker[download_id].update({
+                    'status': 'error',
+                    'message': result.get('message', 'فشل التحميل'),
+                    'error': result.get('error', 'Unknown error'),
+                    'failed_at': datetime.now().isoformat()
+                })
+                
+        except Exception as e:
+            logger.error(f"Download worker error: {e}")
+            logger.error(traceback.format_exc())
+            self.progress_tracker[download_id].update({
+                'status': 'error',
+                'message': f'خطأ في التحميل: {str(e)}',
+                'error': str(e),
+                'failed_at': datetime.now().isoformat()
+            })
+    
+    def execute_download(self, download_id: str, url: str, 
+                        format_command: str, is_audio: bool = False,
+                        media_type: str = MEDIA_TYPE_VIDEO,
+                        options: dict = None) -> dict:
+        """
+        تنفيذ التحميل الفعلي - الدالة الأساسية الثانية
+        
+        Args:
+            download_id: معرف التحميل
+            url: رابط الوسائط
+            format_command: أمر التنسيق لـ yt-dlp
+            is_audio: هل التحميل صوت فقط؟
+            media_type: نوع الوسائط
+            options: خيارات إضافية
+        
+        Returns:
+            dict: {'success': bool, 'file': str, 'message': str, 'error': str}
+        """
+        options = options or {}
+        
+        try:
+            # تحديث حالة البدء
+            if download_id in self.progress_tracker:
+                self.progress_tracker[download_id].update({
+                    'status': 'downloading',
+                    'message': 'جاري التحميل...'
+                })
+            
+            # استخدام SmartMediaDownloader للتحميل الفعلي
+            download_result = self.downloader.download_with_format(
+                url=url,
+                format_command=format_command,
+                download_id=download_id,
+                is_audio=is_audio
+            )
+            
+            if not download_result.get('success'):
+                return {
+                    'success': False,
+                    'message': download_result.get('error', 'فشل التحميل'),
+                    'error': download_result.get('error', 'Unknown error')
+                }
+            
+            # البحث عن الملف المحمّل
+            downloaded_file = self._find_downloaded_file(url)
+            
+            if not downloaded_file:
+                return {
+                    'success': False,
+                    'message': 'تم التحميل لكن الملف غير موجود',
+                    'error': 'File not found'
+                }
+            
+            # إذا كان النوع transcribe، قم بالتفريغ النصي
+            if media_type == self.MEDIA_TYPE_TRANSCRIBE:
+                transcribe_result = self._transcribe_downloaded_file(
+                    downloaded_file, options
+                )
+                if not transcribe_result.get('success'):
+                    return {
+                        'success': False,
+                        'message': f'تم التحميل لكن فشل التفريغ: {transcribe_result.get("error")}',
+                        'error': transcribe_result.get('error'),
+                        'file': downloaded_file  # الملف موجود لكن التفريغ فشل
+                    }
+                # إضافة معلومات التفريغ
+                downloaded_file = {
+                    'video': downloaded_file,
+                    'transcript': transcribe_result.get('transcript_file'),
+                    'text': transcribe_result.get('text')
+                }
+            
+            return {
+                'success': True,
+                'file': downloaded_file,
+                'message': 'تم التحميل بنجاح'
+            }
+            
+        except Exception as e:
+            logger.error(f"Execute download error: {e}")
+            logger.error(traceback.format_exc())
+            return {
+                'success': False,
+                'message': f'خطأ في التحميل: {str(e)}',
+                'error': str(e)
+            }
+    
+    def get_progress(self, download_id: str) -> dict:
+        """
+        الحصول على حالة التقدم - دالة موحدة لتتبع التقدم
+        
+        Args:
+            download_id: معرف التحميل
+        
+        Returns:
+            dict: حالة التقدم الموحدة
+        """
+        if download_id not in self.progress_tracker:
+            return {
+                'status': 'unknown',
+                'percent': '0%',
+                'message': 'التحميل غير موجود',
+                'error': 'Download ID not found'
+            }
+        
+        progress = self.progress_tracker[download_id].copy()
+        
+        # دمج مع download_progress من SmartMediaDownloader إذا كان موجوداً
+        if download_id in download_progress:
+            smart_progress = download_progress[download_id]
+            progress.update({
+                'percent': smart_progress.get('percent', progress.get('percent', '0%')),
+                'method': smart_progress.get('method', '')
+            })
+            if smart_progress.get('status'):
+                progress['status'] = smart_progress['status']
+        
+        # تنسيق موحد للاستجابة
+        return {
+            'success': progress.get('status') == 'completed',
+            'status': progress.get('status', 'unknown'),
+            'percent': progress.get('percent', '0%'),
+            'message': progress.get('message', ''),
+            'download_id': download_id,
+            'url': progress.get('url', ''),
+            'quality': progress.get('quality', ''),
+            'media_type': progress.get('media_type', ''),
+            'file': progress.get('file'),
+            'error': progress.get('error'),
+            'started_at': progress.get('started_at'),
+            'completed_at': progress.get('completed_at'),
+            'failed_at': progress.get('failed_at'),
+            'method': progress.get('method', '')
+        }
+    
+    def _quality_to_format(self, quality: str, media_type: str) -> str:
+        """تحويل quality string إلى format command"""
+        # إذا كان audio
+        if media_type == self.MEDIA_TYPE_AUDIO or quality == 'audio':
+            return self.QUALITY_PRESETS.get('audio_best', 'audio')
+        
+        # البحث في presets
+        quality_lower = quality.lower().strip()
+        if quality_lower in self.QUALITY_PRESETS:
+            return self.QUALITY_PRESETS[quality_lower]
+        
+        # إذا كان quality هو format command مباشرة
+        if '[' in quality or '+' in quality or '/' in quality:
+            return quality
+        
+        # افتراضي
+        return self.QUALITY_PRESETS.get('auto', 'bestvideo+bestaudio/best')
+    
+    def _find_downloaded_file(self, url: str) -> Optional[str]:
+        """البحث عن الملف المحمّل"""
+        try:
+            # الحصول على معلومات الفيديو
+            info = self.downloader._get_video_info(url)
+            title = info.get('title', 'video')
+            
+            # البحث عن الملف الأحدث
+            download_folder = self.downloader.output_dir
+            if download_folder.exists():
+                video_files = []
+                for file in download_folder.iterdir():
+                    if file.is_file():
+                        ext = file.suffix.lower()
+                        if ext in ['.mp4', '.webm', '.mkv', '.mp3', '.m4a', '.mov', '.avi', '.flv']:
+                            video_files.append((file, file.stat().st_mtime))
+                
+                if video_files:
+                    video_files.sort(key=lambda x: x[1], reverse=True)
+                    return str(video_files[0][0])
+        except Exception as e:
+            logger.error(f"Error finding downloaded file: {e}")
+        
+        return None
+    
+    def _transcribe_downloaded_file(self, video_file: str, options: dict) -> dict:
+        """تفريغ نصي للملف المحمّل"""
+        try:
+            if not WHISPER_AVAILABLE and not FASTER_WHISPER_AVAILABLE:
+                return {
+                    'success': False,
+                    'error': 'Whisper not available'
+                }
+            
+            # استخراج الصوت
+            audio_file = video_file.rsplit('.', 1)[0] + '_audio.wav'
+            
+            cmd = [
+                'ffmpeg',
+                '-i', video_file,
+                '-vn',
+                '-acodec', 'pcm_s16le',
+                '-ar', '16000',
+                '-ac', '1',
+                '-threads', '0',
+                '-y',
+                audio_file
+            ]
+            
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
+            
+            # تحويل الصوت إلى نص
+            model_size = options.get('model_size', 'base')
+            language = options.get('language', 'auto')
+            
+            transcribe_result = transcribe_audio(audio_file, model_size, language, use_faster=True)
+            
+            # إنشاء ملف SRT
+            srt_content = SubtitleProcessor.create_srt(
+                transcribe_result['text'],
+                duration=transcribe_result.get('duration'),
+                segments=transcribe_result.get('segments', [])
+            )
+            
+            srt_filename = f"{os.path.splitext(os.path.basename(video_file))[0]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
+            srt_path = os.path.join(app.config['SUBTITLE_FOLDER'], srt_filename)
+            
+            with open(srt_path, 'w', encoding='utf-8') as f:
+                f.write(srt_content)
+            
+            # تنظيف ملف الصوت المؤقت
+            try:
+                if os.path.exists(audio_file):
+                    os.remove(audio_file)
+            except:
+                pass
+            
+            return {
+                'success': True,
+                'text': transcribe_result['text'],
+                'language': transcribe_result.get('language', language),
+                'transcript_file': srt_filename,
+                'transcript_path': srt_path
+            }
+            
+        except Exception as e:
+            logger.error(f"Transcribe error: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def add_quality_preset(self, quality_id: str, format_command: str):
+        """إضافة جودة جديدة - قابل للتوسع"""
+        self.QUALITY_PRESETS[quality_id.lower()] = format_command
+        logger.info(f"Added quality preset: {quality_id} -> {format_command}")
+    
+    def get_available_qualities(self) -> list:
+        """الحصول على قائمة الجودات المتاحة"""
+        return list(self.QUALITY_PRESETS.keys())
+
+
+# Initialize downloader - النظام القديم (للتوافق)
+downloader = SmartMediaDownloader()
+
+# Initialize unified download manager - النظام الموحد الجديد
+unified_downloader = UnifiedDownloadManager()
+
+
 class SubtitleProcessor:
     """معالج الترجمة"""
     
@@ -1586,40 +1992,65 @@ def api_instant_translate():
             if not url:
                 return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
             
-            # استخدام quality مباشرة بدلاً من quality_map
-            # لأن downloader.download يتعامل مع quality كـ string
-            result = downloader.download(url, quality)
+            # استخدام النظام الموحد
+            result = unified_downloader.start_download(
+                url=url,
+                quality=quality,
+                media_type=unified_downloader.MEDIA_TYPE_VIDEO
+            )
             
             if result['success']:
-                video_file = result['file']
-                if not os.path.isabs(video_file):
-                    video_file = os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file))
-                video_file = os.path.normpath(video_file)
+                download_id = result.get('download_id')
                 
-                if not os.path.exists(video_file):
-                    basename = os.path.basename(video_file)
-                    possible_paths = [
-                        os.path.join(app.config['DOWNLOAD_FOLDER'], basename),
-                        video_file
-                    ]
-                    for path in possible_paths:
-                        if os.path.exists(path):
-                            video_file = path
-                            break
+                # الانتظار قليلاً ثم التحقق من التقدم
+                import time
+                time.sleep(3)  # انتظار قصير للبدء
                 
-                # استخدام ملف مؤقت بدلاً من session لتقليل حجم cookie
-                temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
-                with open(temp_file, 'w') as f:
-                    f.write(video_file)
+                # الحصول على حالة التحميل
+                progress = unified_downloader.get_progress(download_id)
                 
-                return jsonify({
-                    'success': True,
-                    'file': video_file,
-                    'info': result['info'],
-                    'temp_file': os.path.basename(temp_file)
-                })
+                if progress.get('status') == 'completed' and progress.get('file'):
+                    video_file = progress.get('file')
+                    if isinstance(video_file, dict):
+                        video_file = video_file.get('video', video_file)
+                    
+                    if not os.path.isabs(video_file):
+                        video_file = os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file))
+                    video_file = os.path.normpath(video_file)
+                    
+                    if not os.path.exists(video_file):
+                        basename = os.path.basename(video_file)
+                        possible_paths = [
+                            os.path.join(app.config['DOWNLOAD_FOLDER'], basename),
+                            video_file
+                        ]
+                        for path in possible_paths:
+                            if os.path.exists(path):
+                                video_file = path
+                                break
+                    
+                    # استخدام ملف مؤقت بدلاً من session
+                    temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+                    with open(temp_file, 'w') as f:
+                        f.write(video_file)
+                    
+                    return jsonify({
+                        'success': True,
+                        'file': video_file,
+                        'info': progress.get('info', {}),
+                        'temp_file': os.path.basename(temp_file),
+                        'download_id': download_id
+                    })
+                else:
+                    # التحميل ما زال قيد التنفيذ
+                    return jsonify({
+                        'success': True,
+                        'download_id': download_id,
+                        'status': 'downloading',
+                        'message': 'جاري التحميل...',
+                        'check_progress': f'/api/media/progress/{download_id}'
+                    })
             else:
-                # إرجاع رسالة الخطأ بشكل واضح
                 error_message = result.get('message', 'حدث خطأ غير معروف أثناء التحميل')
                 logger.error(f"Download failed: {error_message}")
                 return jsonify({
@@ -2044,51 +2475,55 @@ def api_analyze_url():
 
 @app.route('/api/media/download', methods=['POST'])
 def api_start_media_download():
-    """بدء التحميل مع تنسيق محدد"""
+    """بدء التحميل مع تنسيق محدد - API موحد"""
     data = request.json
     url = data.get('url', '')
-    format_command = data.get('format', 'best')
-    is_audio = data.get('audio_only', False)
+    quality = data.get('quality', data.get('format', 'auto'))
+    media_type = data.get('media_type', unified_downloader.MEDIA_TYPE_VIDEO)
+    options = data.get('options', {})
     
     if not url:
         return jsonify({'success': False, 'error': 'No URL provided'}), 400
     
-    import secrets
-    import threading
-    
-    download_id = secrets.token_hex(8)
-    
-    thread = threading.Thread(
-        target=downloader.download_with_format,
-        args=(url, format_command, download_id, is_audio)
+    # استخدام النظام الموحد
+    result = unified_downloader.start_download(
+        url=url,
+        quality=quality,
+        media_type=media_type,
+        options=options
     )
-    thread.start()
     
-    return jsonify({'success': True, 'download_id': download_id})
+    return jsonify(result)
 
 
 @app.route('/api/media/progress/<download_id>')
 def api_get_download_progress(download_id):
-    """الحصول على حالة التحميل"""
-    progress = download_progress.get(download_id, {
-        'status': 'unknown',
-        'percent': '0%'
-    })
+    """الحصول على حالة التحميل - API موحد"""
+    progress = unified_downloader.get_progress(download_id)
     return jsonify(progress)
 
 
 @app.route('/api/download', methods=['POST'])
 def api_download():
-    """API للتحميل"""
+    """API للتحميل - موحد مع النظام الجديد"""
     try:
         data = request.json
         url = data.get('url')
-        quality = data.get('quality', 'best')
+        quality = data.get('quality', 'auto')
+        media_type = data.get('media_type', unified_downloader.MEDIA_TYPE_VIDEO)
+        options = data.get('options', {})
         
         if not url:
             return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
         
-        result = downloader.download(url, quality)
+        # استخدام النظام الموحد
+        result = unified_downloader.start_download(
+            url=url,
+            quality=quality,
+            media_type=media_type,
+            options=options
+        )
+        
         return jsonify(result)
     
     except Exception as e:
@@ -2159,7 +2594,7 @@ def api_get_video_thumbnail():
 
 @app.route('/api/transcribe-from-url', methods=['POST'])
 def api_transcribe_from_url():
-    """تحويل الفيديو من رابط إلى نص"""
+    """تحويل الفيديو من رابط إلى نص - موحد"""
     if not WHISPER_AVAILABLE and not FASTER_WHISPER_AVAILABLE:
         return jsonify({'success': False, 'message': 'لا توجد مكتبة متاحة لتحويل الصوت إلى نص'}), 503
     
@@ -2173,73 +2608,30 @@ def api_transcribe_from_url():
         if not url:
             return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
         
-        # تحميل الفيديو أولاً
-        download_result = downloader.download(url, quality)
-        
-        if not download_result['success']:
-            return jsonify({'success': False, 'message': download_result['message']}), 400
-        
-        video_file = download_result['file']
-        if not os.path.isabs(video_file):
-            video_file = os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file))
-        
-        if not os.path.exists(video_file):
-            return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
-        
-        # استخراج الصوت
-        audio_file = video_file.rsplit('.', 1)[0] + '_audio.wav'
-        
-        cmd = [
-            'ffmpeg',
-            '-i', video_file,
-            '-vn',
-            '-acodec', 'pcm_s16le',
-            '-ar', '16000',
-            '-ac', '1',
-            '-threads', '0',
-            '-y',
-            audio_file
-        ]
-        
-        try:
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
-        except subprocess.CalledProcessError as e:
-            logger.error(f"FFmpeg error: {e.stderr}")
-            return jsonify({'success': False, 'message': f'خطأ في استخراج الصوت: {e.stderr}'}), 500
-        except subprocess.TimeoutExpired:
-            return jsonify({'success': False, 'message': 'انتهت مهلة استخراج الصوت'}), 500
-        
-        # تحويل الصوت إلى نص
-        result = transcribe_audio(audio_file, model_size, language, use_faster=True)
-        
-        # إنشاء ملف SRT
-        srt_content = SubtitleProcessor.create_srt(
-            result['text'],
-            duration=result.get('duration'),
-            segments=result.get('segments', [])
+        # استخدام النظام الموحد مع media_type=transcribe
+        result = unified_downloader.start_download(
+            url=url,
+            quality=quality,
+            media_type=unified_downloader.MEDIA_TYPE_TRANSCRIBE,
+            options={
+                'language': language,
+                'model_size': model_size
+            }
         )
         
-        srt_filename = f"{os.path.splitext(os.path.basename(video_file))[0]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
-        srt_path = os.path.join(app.config['SUBTITLE_FOLDER'], srt_filename)
+        if not result.get('success'):
+            return jsonify(result), 400
         
-        with open(srt_path, 'w', encoding='utf-8') as f:
-            f.write(srt_content)
+        download_id = result.get('download_id')
         
-        # تنظيف ملف الصوت المؤقت
-        try:
-            if os.path.exists(audio_file):
-                os.remove(audio_file)
-        except:
-            pass
-        
+        # إرجاع download_id للتحقق من التقدم لاحقاً
         return jsonify({
             'success': True,
-            'text': result['text'],
-            'language': result.get('language', language),
-            'srt_file': srt_filename,
-            'segments': result.get('segments', [])
+            'download_id': download_id,
+            'message': 'تم بدء التحميل والتفريغ النصي',
+            'check_progress': f'/api/media/progress/{download_id}'
         })
-    
+        
     except Exception as e:
         logger.error(f"Transcribe from URL error: {e}")
         logger.error(traceback.format_exc())
