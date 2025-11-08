@@ -887,7 +887,18 @@ def api_instant_translate():
     """API للترجمة الفورية - معالجة الخطوات المتعددة"""
     try:
         data = request.json
+        
+        if not data:
+            logger.error("No JSON data received")
+            return jsonify({'success': False, 'message': 'لا توجد بيانات في الطلب'}), 400
+        
         step = data.get('step')
+        
+        if not step:
+            logger.error(f"Missing 'step' parameter. Received data: {data}")
+            return jsonify({'success': False, 'message': 'خطوة غير محددة. يرجى تحديد step'}), 400
+        
+        logger.info(f"Processing step: {step}, data keys: {list(data.keys())}")
         
         if step == 'download':
             # Step 1: Download video
@@ -1198,10 +1209,12 @@ def api_instant_translate():
                 return jsonify({'success': False, 'message': result['message']}), 500
                 
         else:
-            return jsonify({'success': False, 'message': 'خطوة غير صحيحة'}), 400
+            logger.error(f"Unknown step: {step}")
+            return jsonify({'success': False, 'message': f'خطوة غير صحيحة: {step}'}), 400
             
     except Exception as e:
         logger.error(f"Instant translate error: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/smart-translate', methods=['POST'])
