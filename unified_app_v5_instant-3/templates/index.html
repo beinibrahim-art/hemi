@@ -2987,14 +2987,23 @@
         window.startMerge = startMerge;
         window.startTranslate = startTranslate;
         window.startTranscribe = startTranscribe;
-
-        function copyText(text) {
-            navigator.clipboard.writeText(text).then(() => {
-                showAlert('تم النسخ إلى الحافظة!', 'success');
-            }).catch(err => {
-                showAlert('فشل النسخ', 'danger');
-            });
-        }
+        window.checkQualities = checkQualities;
+        window.createSubtitleFromText = createSubtitleFromText;
+        window.startBatchDownload = startBatchDownload;
+        window.showCleanupModal = showCleanupModal;
+        window.cleanupFiles = cleanupFiles;
+        window.selectFont = selectFont;
+        window.selectPosition = selectPosition;
+        window.selectQuality = selectQuality;
+        window.selectInstantFont = selectInstantFont;
+        window.selectInstantPosition = selectInstantPosition;
+        window.selectInstantQuality = selectInstantQuality;
+        window.resetMerge = resetMerge;
+        window.copyText = copyText;
+        window.removeTranscribeFile = removeTranscribeFile;
+        window.finalizeInstantTranslation = finalizeInstantTranslation;
+        window.updateInstantPreview = updateInstantPreview;
+        window.selectDownloadQuality = selectDownloadQuality;
 
         function escapeText(text) {
             return text.replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n');
@@ -3113,6 +3122,20 @@
         
         // Update storage info on page load and periodically
         document.addEventListener('DOMContentLoaded', function() {
+            // Verify Bootstrap is loaded
+            if (typeof bootstrap === 'undefined') {
+                console.error('Bootstrap JS is not loaded!');
+                alert('خطأ: لم يتم تحميل Bootstrap. يرجى إعادة تحميل الصفحة.');
+                return;
+            }
+            
+            // Verify Axios is loaded
+            if (typeof axios === 'undefined') {
+                console.error('Axios is not loaded!');
+                alert('خطأ: لم يتم تحميل Axios. يرجى إعادة تحميل الصفحة.');
+                return;
+            }
+            
             updateStorageInfo();
             // Update every 30 seconds
             setInterval(updateStorageInfo, 30000);
