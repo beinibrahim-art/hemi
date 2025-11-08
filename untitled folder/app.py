@@ -801,28 +801,29 @@ class VideoProcessor:
             # استخدام المسار المطلق مباشرة
             subtitle_path_abs = str(Path(subtitle_path).resolve())
             
-            # طريقة أبسط: استخدام subtitles filter مع المسار المطلق
-            # على Linux/Mac، يمكن استخدام المسار مباشرة إذا لم يكن فيه مسافات
-            # إذا كان فيه مسافات، نستخدم escape بسيط
-            
-            # التحقق من وجود مسافات في المسار
-            has_spaces = ' ' in subtitle_path_abs
-            has_special = any(c in subtitle_path_abs for c in ['[', ']', ':', ','])
+            # طريقة محسّنة: escape المسار حسب قواعد ffmpeg filter
+            # ffmpeg filters تحتاج escape خاص للأحرف: [, ], :, ,, \, '
+            # المسافات لا تحتاج escape في filter paths إذا استخدمنا المسار مباشرة
             
             if platform.system() == 'Windows':
                 # على Windows، تحويل المسار إلى format مناسب
-                if has_spaces or has_special:
-                    subtitle_path_escaped = subtitle_path_abs.replace('\\', '/').replace(':', '\\:')
-                else:
-                    subtitle_path_escaped = subtitle_path_abs.replace('\\', '/')
+                # استبدال backslashes بـ forward slashes
+                subtitle_path_normalized = subtitle_path_abs.replace('\\', '/')
+                # escape colon في Windows paths (C: -> C\:)
+                if ':' in subtitle_path_normalized:
+                    subtitle_path_normalized = subtitle_path_normalized.replace(':', '\\:')
+                subtitle_path_escaped = subtitle_path_normalized
             else:
-                # على Linux/Mac
-                if has_spaces or has_special:
-                    # escape المسافات والأحرف الخاصة
-                    subtitle_path_escaped = subtitle_path_abs.replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:').replace(',', '\\,')
-                else:
-                    # استخدام المسار مباشرة
-                    subtitle_path_escaped = subtitle_path_abs
+                # على Linux/Mac - escape الأحرف الخاصة فقط
+                # ffmpeg filter syntax يتطلب escape: [, ], :, ,
+                # لا نescape backslash لأنه ليس جزء من المسار الطبيعي على Linux/Mac
+                subtitle_path_escaped = subtitle_path_abs
+                # Escape الأحرف الخاصة فقط
+                subtitle_path_escaped = subtitle_path_escaped.replace('[', '\\[')
+                subtitle_path_escaped = subtitle_path_escaped.replace(']', '\\]')
+                subtitle_path_escaped = subtitle_path_escaped.replace(':', '\\:')
+                subtitle_path_escaped = subtitle_path_escaped.replace(',', '\\,')
+                # المسافات لا تحتاج escape في ffmpeg filter paths
             
             # دمج مع الفيديو
             # استخدام subtitles filter لـ SRT (أفضل للترجمة الفورية)
@@ -907,21 +908,26 @@ class VideoProcessor:
                     with open(ass_path, 'w', encoding='utf-8-sig') as f:
                         f.write(ass_content)
                     
-                    # Escape المسار بشكل صحيح للـ ASS
+                    # Escape المسار بشكل صحيح للـ ASS (نفس منطق escape السابق)
                     ass_path_abs = str(Path(ass_path).resolve())
-                    has_spaces = ' ' in ass_path_abs
-                    has_special = any(c in ass_path_abs for c in ['[', ']', ':', ','])
                     
                     if platform.system() == 'Windows':
-                        if has_spaces or has_special:
-                            ass_path_escaped = ass_path_abs.replace('\\', '/').replace(':', '\\:')
-                        else:
-                            ass_path_escaped = ass_path_abs.replace('\\', '/')
+                        # على Windows، تحويل المسار إلى format مناسب
+                        ass_path_normalized = ass_path_abs.replace('\\', '/')
+                        # escape colon في Windows paths
+                        if ':' in ass_path_normalized:
+                            ass_path_normalized = ass_path_normalized.replace(':', '\\:')
+                        ass_path_escaped = ass_path_normalized
                     else:
-                        if has_spaces or has_special:
-                            ass_path_escaped = ass_path_abs.replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:').replace(',', '\\,')
-                        else:
-                            ass_path_escaped = ass_path_abs
+                        # على Linux/Mac - escape الأحرف الخاصة فقط
+                        # لا نescape backslash لأنه ليس جزء من المسار الطبيعي على Linux/Mac
+                        ass_path_escaped = ass_path_abs
+                        # Escape الأحرف الخاصة فقط
+                        ass_path_escaped = ass_path_escaped.replace('[', '\\[')
+                        ass_path_escaped = ass_path_escaped.replace(']', '\\]')
+                        ass_path_escaped = ass_path_escaped.replace(':', '\\:')
+                        ass_path_escaped = ass_path_escaped.replace(',', '\\,')
+                        # المسافات لا تحتاج escape في ffmpeg filter paths
                     
                     vf_filter_alt = f"ass={ass_path_escaped}"
                     
