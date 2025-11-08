@@ -110,21 +110,22 @@ class VideoDownloader:
             'ignoreerrors': False,
             'no_check_certificate': True,
             'prefer_insecure': False,
-            # استخدام extractor args لتقليل التحذيرات من YouTube
+            # استخدام extractor args محسّن
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],  # تجنب web_safari الذي يسبب تحذيرات SABR
+                    'player_client': ['web'],  # استخدام web فقط لتجنب مشاكل android
                 }
             },
         }
         
-        # إعدادات الجودة
+        # إعدادات الجودة مع fallback أفضل
         if quality == 'best':
-            opts['format'] = 'bestvideo[ext=mp4][vcodec!*=av01]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+            # محاولة أفضل تنسيق متاح مع fallback
+            opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
         elif quality == '720p' or quality == 'medium':
-            opts['format'] = 'bestvideo[height<=720][ext=mp4][vcodec!*=av01]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio/best[height<=720][ext=mp4]/best'
+            opts['format'] = 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best'
         elif quality == '480p' or quality == 'low':
-            opts['format'] = 'bestvideo[height<=480][ext=mp4][vcodec!*=av01]+bestaudio[ext=m4a]/bestvideo[height<=480][ext=mp4]+bestaudio/best[height<=480][ext=mp4]/best'
+            opts['format'] = 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]/best'
         elif quality == 'audio':
             opts['format'] = 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio'
             opts['postprocessors'] = [{
@@ -133,7 +134,7 @@ class VideoDownloader:
                 'preferredquality': '192',
             }]
         else:
-            # معالجة تنسيقات أخرى مثل 'bestvideo[height<=720]+bestaudio'
+            # معالجة تنسيقات أخرى مع fallback
             opts['format'] = quality
         
         # إعدادات خاصة بمنصة TikTok
@@ -156,66 +157,112 @@ class VideoDownloader:
         
         try:
             platform = self.detect_platform(url)
-            ydl_opts = self.get_ydl_opts(platform, quality)
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # استخراج المعلومات أولاً
-                info = ydl.extract_info(url, download=False)
-                
-                if not info:
-                    raise Exception("لم يتم العثور على معلومات الفيديو")
-                
-                # التحقق من وجود الملف
-                expected_filename = ydl.prepare_filename(info)
-                if quality == 'audio':
-                    expected_filename = expected_filename.rsplit('.', 1)[0] + '.mp3'
-                
-                expected_basename = os.path.basename(expected_filename)
-                existing_file = os.path.join(app.config['DOWNLOAD_FOLDER'], expected_basename)
-                
-                if os.path.exists(existing_file):
-                    logger.info(f"الملف موجود مسبقاً: {existing_file}")
-                    filename = existing_file
-                else:
-                    # تحميل الفيديو
-                    ydl.download([url])
-                    filename = ydl.prepare_filename(info)
-                    if quality == 'audio':
-                        filename = filename.rsplit('.', 1)[0] + '.mp3'
+            # محاولة التحميل مع fallback للتنسيقات
+            formats_to_try = []
+            
+            if quality == 'best':
+                formats_to_try = [
+                    'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best',
+                    'bestvideo+bestaudio/best',
+                    'best'
+                ]
+            elif quality == '720p' or quality == 'medium':
+                formats_to_try = [
+                    'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best',
+                    'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
+                    'best[height<=720]/best'
+                ]
+            elif quality == '480p' or quality == 'low':
+                formats_to_try = [
+                    'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]/best',
+                    'bestvideo[height<=480]+bestaudio/best[height<=480]/best',
+                    'best[height<=480]/best'
+                ]
+            elif quality == 'audio':
+                formats_to_try = [
+                    'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
+                    'bestaudio'
+                ]
+            else:
+                formats_to_try = [quality, 'best']
+            
+            last_error = None
+            for format_str in formats_to_try:
+                try:
+                    ydl_opts = self.get_ydl_opts(platform, quality)
+                    ydl_opts['format'] = format_str
                     
-                    filename = os.path.normpath(filename)
-                    
-                    if not os.path.isabs(filename):
-                        basename = os.path.basename(filename)
-                        full_path = os.path.join(app.config['DOWNLOAD_FOLDER'], basename)
-                        if os.path.exists(full_path):
-                            filename = full_path
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        # استخراج المعلومات أولاً
+                        info = ydl.extract_info(url, download=False)
+                        
+                        if not info:
+                            raise Exception("لم يتم العثور على معلومات الفيديو")
+                        
+                        # التحقق من وجود الملف
+                        expected_filename = ydl.prepare_filename(info)
+                        if quality == 'audio':
+                            expected_filename = expected_filename.rsplit('.', 1)[0] + '.mp3'
+                        
+                        expected_basename = os.path.basename(expected_filename)
+                        existing_file = os.path.join(app.config['DOWNLOAD_FOLDER'], expected_basename)
+                        
+                        if os.path.exists(existing_file):
+                            logger.info(f"الملف موجود مسبقاً: {existing_file}")
+                            filename = existing_file
                         else:
-                            # البحث عن الملف الأحدث
-                            download_folder = app.config['DOWNLOAD_FOLDER']
-                            if os.path.exists(download_folder):
-                                video_files = []
-                                for file in os.listdir(download_folder):
-                                    file_path = os.path.join(download_folder, file)
-                                    if os.path.isfile(file_path) and file.endswith(('.mp4', '.webm', '.mkv', '.mp3', '.m4a')):
-                                        video_files.append((file_path, os.path.getmtime(file_path)))
-                                
-                                if video_files:
-                                    video_files.sort(key=lambda x: x[1], reverse=True)
-                                    filename = video_files[0][0]
-                
-                if not os.path.exists(filename):
-                    raise Exception(f"لم يتم العثور على الملف بعد التحميل: {filename}")
-                
-                result['success'] = True
-                result['message'] = 'تم التحميل بنجاح'
-                result['file'] = filename
-                result['info'] = {
-                    'title': info.get('title', 'Unknown'),
-                    'duration': info.get('duration', 0),
-                    'platform': platform,
-                    'quality': quality
-                }
+                            # تحميل الفيديو
+                            ydl.download([url])
+                            filename = ydl.prepare_filename(info)
+                            if quality == 'audio':
+                                filename = filename.rsplit('.', 1)[0] + '.mp3'
+                            
+                            filename = os.path.normpath(filename)
+                            
+                            if not os.path.isabs(filename):
+                                basename = os.path.basename(filename)
+                                full_path = os.path.join(app.config['DOWNLOAD_FOLDER'], basename)
+                                if os.path.exists(full_path):
+                                    filename = full_path
+                                else:
+                                    # البحث عن الملف الأحدث
+                                    download_folder = app.config['DOWNLOAD_FOLDER']
+                                    if os.path.exists(download_folder):
+                                        video_files = []
+                                        for file in os.listdir(download_folder):
+                                            file_path = os.path.join(download_folder, file)
+                                            if os.path.isfile(file_path) and file.endswith(('.mp4', '.webm', '.mkv', '.mp3', '.m4a')):
+                                                video_files.append((file_path, os.path.getmtime(file_path)))
+                                        
+                                        if video_files:
+                                            video_files.sort(key=lambda x: x[1], reverse=True)
+                                            filename = video_files[0][0]
+                        
+                        if not os.path.exists(filename):
+                            raise Exception(f"لم يتم العثور على الملف بعد التحميل: {filename}")
+                        
+                        result['success'] = True
+                        result['message'] = 'تم التحميل بنجاح'
+                        result['file'] = filename
+                        result['info'] = {
+                            'title': info.get('title', 'Unknown'),
+                            'duration': info.get('duration', 0),
+                            'platform': platform,
+                            'quality': quality
+                        }
+                        return result
+                        
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"Failed with format {format_str}: {e}")
+                    continue
+            
+            # إذا فشلت جميع المحاولات
+            if last_error:
+                raise last_error
+            else:
+                raise Exception("فشل التحميل بعد محاولات متعددة")
         
         except Exception as e:
             result['message'] = f'خطأ في التحميل: {str(e)}'
@@ -344,12 +391,13 @@ class SubtitleProcessor:
         
         alignment = {'top': '8', 'center': '5', 'bottom': '2'}.get(position, '2')
         
+        # حساب margin_v بناءً على الموضع و vertical_offset
         if position == 'top':
-            margin_v = max(10, 10 + vertical_offset)
+            margin_v = max(10, 10 - vertical_offset)  # سالب يرفع لأعلى
         elif position == 'center':
             margin_v = 10
-        else:
-            margin_v = max(10, 10 - vertical_offset)
+        else:  # bottom
+            margin_v = max(10, 10 + vertical_offset)  # موجب يخفض لأسفل
         
         ass_header = f"""[Script Info]
 Title: Generated Subtitles
@@ -386,9 +434,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         start_ass = SubtitleProcessor.srt_time_to_ass(start)
                         end_ass = SubtitleProcessor.srt_time_to_ass(end)
                         
+                        # استخدام Effect لتطبيق vertical_offset بدقة
                         effect = ''
-                        if position == 'center' and vertical_offset != 0:
-                            effect = f"\\pos(960,{540 + vertical_offset})"
+                        if vertical_offset != 0:
+                            if position == 'center':
+                                # للمركز: استخدام pos لتحديد الموضع بدقة
+                                y_pos = 540 - vertical_offset  # 540 هو منتصف 1080
+                                effect = f"\\pos(960,{y_pos})"
+                            elif position == 'top':
+                                # للأعلى: استخدام an=8 و pos
+                                y_pos = 50 - vertical_offset
+                                effect = f"\\an8\\pos(960,{y_pos})"
+                            else:  # bottom
+                                # للأسفل: استخدام an=2 و pos
+                                y_pos = 1030 - vertical_offset  # 1030 = 1080 - 50
+                                effect = f"\\an2\\pos(960,{y_pos})"
                         
                         events.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,{effect},{text}")
                     
