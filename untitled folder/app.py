@@ -1203,32 +1203,48 @@ def api_instant_translate():
             })
         
         elif step == 'merge':
+            logger.info(f"Merge step called with data keys: {list(data.keys())}")
+            
             video_file = data.get('video_file')
             # دعم كلا الاسمين: subtitle_text و translated_text
             subtitle_text = data.get('subtitle_text') or data.get('translated_text')
             
+            logger.info(f"Initial values: video_file={bool(video_file)}, subtitle_text={bool(subtitle_text)}")
+            
             # قراءة من الملف المؤقت إذا لزم الأمر
             if not video_file and data.get('temp_video_file'):
                 temp_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_video_file']
+                logger.info(f"Trying to read video from temp file: {temp_path}")
                 if temp_path.exists():
                     with open(temp_path, 'r') as f:
                         video_file = f.read().strip()
+                        logger.info(f"Read video_file from temp: {video_file}")
+                else:
+                    logger.warning(f"Temp video file not found: {temp_path}")
             
             if not subtitle_text and data.get('temp_translated_file'):
                 temp_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_translated_file']
+                logger.info(f"Trying to read subtitle from temp file: {temp_path}")
                 if temp_path.exists():
                     with open(temp_path, 'r', encoding='utf-8') as f:
                         subtitle_text = f.read().strip()
+                        logger.info(f"Read subtitle_text from temp, length: {len(subtitle_text)}")
+                else:
+                    logger.warning(f"Temp translated file not found: {temp_path}")
             
             if not video_file or not subtitle_text:
                 logger.error(f"Merge error: video_file={video_file}, subtitle_text={'exists' if subtitle_text else 'missing'}")
+                logger.error(f"Data received: {json.dumps({k: str(v)[:100] if isinstance(v, str) else v for k, v in data.items()}, ensure_ascii=False)}")
                 return jsonify({
                     'success': False,
                     'message': 'ملف الفيديو أو النص غير موجود',
                     'debug': {
                         'has_video_file': bool(video_file),
                         'has_subtitle_text': bool(subtitle_text),
-                        'video_file': video_file if video_file else None
+                        'video_file': video_file if video_file else None,
+                        'received_keys': list(data.keys()),
+                        'temp_video_file': data.get('temp_video_file'),
+                        'temp_translated_file': data.get('temp_translated_file')
                     }
                 }), 400
             
@@ -1583,10 +1599,13 @@ def api_storage_info():
 def api_get_video_thumbnail():
     """استخراج صورة مصغرة من الفيديو"""
     try:
-        data = request.json
+        data = request.json or {}
         video_file = data.get('video_file')
         
+        logger.info(f"Thumbnail request: video_file={video_file}")
+        
         if not video_file:
+            logger.warning("No video_file provided in thumbnail request")
             return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
         
         # البحث عن الملف
@@ -1595,14 +1614,22 @@ def api_get_video_thumbnail():
             basename = os.path.basename(video_file)
             possible_paths = [
                 download_folder / basename,
-                Path(video_file)
+                Path(video_file),
+                download_folder / video_file.replace('downloads/', '').replace('downloads\\', '')
             ]
             
+            logger.info(f"Video file not found at {video_file}, trying paths: {possible_paths}")
+            
+            found = False
             for path in possible_paths:
                 if path.exists():
                     video_file = str(path)
+                    found = True
+                    logger.info(f"Found video file at: {video_file}")
                     break
-            else:
+            
+            if not found:
+                logger.error(f"Video file not found in any location: {video_file}")
                 return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 404
         
         # استخراج صورة مصغرة باستخدام ffmpeg
