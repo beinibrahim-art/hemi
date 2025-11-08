@@ -126,7 +126,7 @@ class EnhancedDownloader:
     def get_ydl_opts(self, platform: str, quality: str = 'best') -> dict:
         """الحصول على إعدادات yt-dlp المناسبة للمنصة"""
         
-        # Base options
+        # Base options - optimized for speed
         opts = {
             'outtmpl': os.path.join(app.config['DOWNLOAD_FOLDER'], '%(title)s.%(ext)s'),
             'quiet': False,
@@ -137,9 +137,18 @@ class EnhancedDownloader:
             'no_color': True,
             'geo_bypass': True,
             'socket_timeout': 30,
-            'retries': 10,
-            'fragment_retries': 10,
-            'concurrent_fragment_downloads': 5
+            'retries': 3,  # Reduced retries for speed
+            'fragment_retries': 3,
+            'concurrent_fragment_downloads': 16,  # Increased for faster downloads
+            'http_chunk_size': 10485760,  # 10MB chunks for faster downloads
+            'no_check_certificate': True,
+            'prefer_insecure': False,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],  # Faster clients
+                    'skip': ['dash', 'hls']  # Skip some formats for speed
+                }
+            }
         }
         
         # Quality settings
@@ -207,13 +216,71 @@ class EnhancedDownloader:
                 if not info:
                     raise Exception("لم يتم العثور على معلومات الفيديو")
                 
-                # Download the video
-                ydl.download([url])
-                
-                # Get the filename
-                filename = ydl.prepare_filename(info)
+                # Check if file already exists
+                expected_filename = ydl.prepare_filename(info)
                 if quality == 'audio':
-                    filename = filename.rsplit('.', 1)[0] + '.mp3'
+                    expected_filename = expected_filename.rsplit('.', 1)[0] + '.mp3'
+                
+                expected_basename = os.path.basename(expected_filename)
+                existing_file = os.path.join(app.config['DOWNLOAD_FOLDER'], expected_basename)
+                
+                # If file exists, use it
+                if os.path.exists(existing_file):
+                    logger.info(f"File already exists: {existing_file}")
+                    filename = existing_file
+                else:
+                    # Download the video
+                    ydl.download([url])
+                    
+                    # Get the filename - yt-dlp might return relative or absolute path
+                    filename = ydl.prepare_filename(info)
+                    if quality == 'audio':
+                        filename = filename.rsplit('.', 1)[0] + '.mp3'
+                    
+                    # Normalize the path
+                    filename = os.path.normpath(filename)
+                    
+                    # If not absolute path, try to find it in download folder
+                    if not os.path.isabs(filename):
+                        # Try with basename in download folder
+                        basename = os.path.basename(filename)
+                        full_path = os.path.join(app.config['DOWNLOAD_FOLDER'], basename)
+                        if os.path.exists(full_path):
+                            filename = full_path
+                        else:
+                            # Search for the file in download folder
+                            download_folder = app.config['DOWNLOAD_FOLDER']
+                            if os.path.exists(download_folder):
+                                # Get most recently modified video file
+                                video_files = []
+                                for file in os.listdir(download_folder):
+                                    file_path = os.path.join(download_folder, file)
+                                    if os.path.isfile(file_path) and file.endswith(('.mp4', '.webm', '.mkv', '.mp3', '.m4a')):
+                                        video_files.append((file_path, os.path.getmtime(file_path)))
+                                
+                                if video_files:
+                                    # Sort by modification time, get most recent
+                                    video_files.sort(key=lambda x: x[1], reverse=True)
+                                    filename = video_files[0][0]
+                                    logger.info(f"Found video file: {filename}")
+                
+                # Final verification
+                if not os.path.exists(filename):
+                    logger.warning(f"File not found at {filename}, searching download folder...")
+                    download_folder = app.config['DOWNLOAD_FOLDER']
+                    if os.path.exists(download_folder):
+                        all_files = os.listdir(download_folder)
+                        logger.info(f"Files in download folder: {all_files}")
+                        # Try to find any video file
+                        for file in all_files:
+                            file_path = os.path.join(download_folder, file)
+                            if os.path.isfile(file_path) and any(file.lower().endswith(ext) for ext in ['.mp4', '.webm', '.mkv', '.mp3', '.m4a']):
+                                filename = file_path
+                                logger.info(f"Using file: {filename}")
+                                break
+                
+                if not os.path.exists(filename):
+                    raise Exception(f"لم يتم العثور على الملف بعد التحميل: {filename}")
                 
                 result['success'] = True
                 result['message'] = 'تم التحميل بنجاح'
@@ -228,6 +295,7 @@ class EnhancedDownloader:
         except Exception as e:
             result['message'] = f'خطأ في التحميل: {str(e)}'
             logger.error(f"Download error: {e}")
+            logger.error(traceback.format_exc())
             
             # Try alternative method for TikTok
             if platform == 'tiktok':
@@ -354,47 +422,75 @@ class SubtitleProcessor:
     """معالج الترجمة المتقدم"""
     
     @staticmethod
-    def create_srt(text: str, duration: int = None) -> str:
-        """إنشاء ملف SRT من النص"""
-        lines = text.split('\n')
+    def create_srt(text: str, duration: float = None, segments: List[Dict] = None) -> str:
+        """إنشاء ملف SRT من النص مع توقيتات دقيقة"""
         srt_content = []
         
-        # تقسيم النص إلى أجزاء مناسبة
-        segments = []
+        # If segments with timing are provided, use them
+        if segments:
+            for i, segment in enumerate(segments):
+                start_time = float(segment.get('start', 0))
+                end_time = float(segment.get('end', start_time + 3))  # Use provided end_time, fallback to start+3
+                text_segment = segment.get('text', '').strip()
+                
+                # Ensure end_time is valid
+                if end_time <= start_time:
+                    end_time = start_time + 3.0
+                
+                start_str = SubtitleProcessor.seconds_to_srt_time(start_time)
+                end_str = SubtitleProcessor.seconds_to_srt_time(end_time)
+                
+                srt_content.append(f"{i + 1}")
+                srt_content.append(f"{start_str} --> {end_str}")
+                srt_content.append(text_segment)
+                srt_content.append("")
+            
+            return '\n'.join(srt_content)
+        
+        # Otherwise, split text intelligently
+        lines = text.split('\n')
+        segments_list = []
         current_segment = []
         char_count = 0
         
         for line in lines:
+            if not line.strip():
+                continue
             words = line.split()
             for word in words:
                 current_segment.append(word)
                 char_count += len(word) + 1
                 
-                # إنشاء جزء جديد كل 40 حرف تقريباً
-                if char_count >= 40 or word.endswith('.') or word.endswith('!') or word.endswith('?'):
-                    segments.append(' '.join(current_segment))
+                # Create new segment every ~35-45 characters or at punctuation
+                if char_count >= 40 or word.endswith(('.', '!', '?', '،', '؛')):
+                    segments_list.append(' '.join(current_segment))
                     current_segment = []
                     char_count = 0
         
         if current_segment:
-            segments.append(' '.join(current_segment))
+            segments_list.append(' '.join(current_segment))
         
-        # حساب التوقيت لكل جزء
-        if not segments:
+        if not segments_list:
             return ""
         
-        segment_duration = (duration or 60) / len(segments) if duration else 3
+        # Calculate timing based on duration
+        if duration and duration > 0:
+            segment_duration = duration / len(segments_list)
+            # Ensure minimum 2 seconds per segment
+            segment_duration = max(segment_duration, 2.0)
+        else:
+            segment_duration = 3.0
         
-        for i, segment in enumerate(segments):
+        for i, segment in enumerate(segments_list):
             start_time = i * segment_duration
-            end_time = (i + 1) * segment_duration
+            end_time = min((i + 1) * segment_duration, duration) if duration else (i + 1) * segment_duration
             
             start_str = SubtitleProcessor.seconds_to_srt_time(start_time)
             end_str = SubtitleProcessor.seconds_to_srt_time(end_time)
             
             srt_content.append(f"{i + 1}")
             srt_content.append(f"{start_str} --> {end_str}")
-            srt_content.append(segment)
+            srt_content.append(segment.strip())
             srt_content.append("")
         
         return '\n'.join(srt_content)
@@ -418,7 +514,8 @@ class SubtitleProcessor:
         bg_color: str = "000000",
         bg_opacity: int = 128,
         position: str = "bottom",
-        font_name: str = "Arial"
+        font_name: str = "Arial",
+        vertical_offset: int = 0
     ) -> str:
         """إنشاء ملف ASS متقدم للترجمة مع التنسيق"""
         
@@ -433,6 +530,15 @@ class SubtitleProcessor:
             'bottom': '2'
         }.get(position, '2')
         
+        # Calculate MarginV based on position and vertical_offset
+        # MarginV: distance from edge (top for top alignment, bottom for bottom alignment)
+        if position == 'top':
+            margin_v = max(10, 10 + vertical_offset)  # Distance from top
+        elif position == 'center':
+            margin_v = 10  # Center doesn't use MarginV, but we'll use it for offset
+        else:  # bottom
+            margin_v = max(10, 10 - vertical_offset)  # Distance from bottom
+        
         ass_header = f"""[Script Info]
 Title: Generated Subtitles
 ScriptType: v4.00+
@@ -444,7 +550,7 @@ PlayResY: 1080
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},{ass_font_color},&H000000FF,&H00000000,{ass_bg_color},0,0,0,0,100,100,0,0,3,2,1,{alignment},10,10,10,1
+Style: Default,{font_name},{font_size},{ass_font_color},&H000000FF,&H00000000,{ass_bg_color},0,0,0,0,100,100,0,0,3,2,1,{alignment},10,10,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -472,7 +578,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         start_ass = SubtitleProcessor.srt_time_to_ass(start)
                         end_ass = SubtitleProcessor.srt_time_to_ass(end)
                         
-                        events.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
+                        # Add vertical offset effect if needed (for center position)
+                        effect = ''
+                        if position == 'center' and vertical_offset != 0:
+                            # Use \pos for precise positioning
+                            effect = f"\\pos(960,{540 + vertical_offset})"
+                        
+                        events.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,{effect},{text}")
                     
                     i += 4  # Skip to next subtitle
                 else:
@@ -519,23 +631,28 @@ class VideoProcessor:
             if not VideoProcessor.check_ffmpeg():
                 raise Exception("ffmpeg غير متوفر. يرجى تثبيته أولاً")
             
+            # Get video duration for better subtitle timing
+            video_duration = VideoProcessor.get_video_duration(video_path)
+            
             # Prepare subtitle filter
             subtitle_filter = VideoProcessor.create_subtitle_filter(subtitle_path, subtitle_settings)
             
             # Prepare quality settings
-            quality_settings = VideoProcessor.get_quality_settings(quality)
+            # IMPORTANT: When using video filter (-vf), we cannot use -c:v copy
+            # We must re-encode the video
+            quality_settings = VideoProcessor.get_quality_settings(quality, use_filter=True)
             
-            # Build ffmpeg command
+            # Build ffmpeg command with optimized settings for speed
             cmd = [
                 'ffmpeg',
                 '-i', video_path,
                 '-vf', subtitle_filter,
                 '-c:a', 'copy',  # Copy audio without re-encoding
-                '-metadata:s:s:0', 'language=ara',  # Set subtitle language to Arabic
-                '-sub_charenc', 'UTF-8'  # Force UTF-8 encoding
+                '-threads', '0',  # Use all available CPU threads
+                '-movflags', '+faststart',  # Optimize for web playback
             ]
             
-            # Add quality settings
+            # Add quality settings (video encoding)
             cmd.extend(quality_settings)
             
             # Add output
@@ -546,28 +663,87 @@ class VideoProcessor:
             
             logger.info(f"FFmpeg command: {' '.join(cmd)}")
             
-            # Execute ffmpeg
-            process = subprocess.run(
+            # Execute ffmpeg with progress tracking
+            process = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=600  # 10 minutes timeout
+                bufsize=1,
+                universal_newlines=True
             )
             
-            if process.returncode == 0:
-                result['success'] = True
-                result['message'] = 'تم دمج الترجمة بنجاح'
-                result['output_file'] = output_path
-            else:
-                raise Exception(f"FFmpeg error: {process.stderr}")
+            # Wait for completion with timeout
+            try:
+                stdout, stderr = process.communicate(timeout=600)  # 10 minutes timeout
+                
+                if process.returncode == 0:
+                    result['success'] = True
+                    result['message'] = 'تم دمج الترجمة بنجاح'
+                    result['output_file'] = output_path
+                else:
+                    error_msg = stderr or stdout
+                    logger.error(f"FFmpeg error: {error_msg}")
+                    raise Exception(f"FFmpeg error: {error_msg}")
+            except subprocess.TimeoutExpired:
+                process.kill()
+                raise Exception("انتهت مهلة المعالجة. الملف كبير جداً")
             
         except subprocess.TimeoutExpired:
             result['message'] = 'انتهت مهلة المعالجة. الملف كبير جداً'
         except Exception as e:
             result['message'] = f'خطأ في دمج الترجمة: {str(e)}'
             logger.error(f"Merge error: {e}")
+            logger.error(traceback.format_exc())
         
         return result
+    
+    @staticmethod
+    def get_video_dimensions(video_path: str) -> Dict:
+        """الحصول على مقاسات الفيديو الدقيقة"""
+        try:
+            cmd = [
+                'ffprobe',
+                '-v', 'error',
+                '-select_streams', 'v:0',
+                '-show_entries', 'stream=width,height',
+                '-of', 'json',
+                video_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                import json
+                data = json.loads(result.stdout)
+                if 'streams' in data and len(data['streams']) > 0:
+                    width = int(data['streams'][0].get('width', 0))
+                    height = int(data['streams'][0].get('height', 0))
+                    return {
+                        'width': width,
+                        'height': height,
+                        'aspect_ratio': width / height if height > 0 else 1.0
+                    }
+        except Exception as e:
+            logger.warning(f"Could not get video dimensions: {e}")
+        return {'width': 1920, 'height': 1080, 'aspect_ratio': 16/9}
+    
+    @staticmethod
+    def get_video_duration(video_path: str) -> float:
+        """الحصول على مدة الفيديو"""
+        try:
+            cmd = [
+                'ffprobe',
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                video_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                duration = float(result.stdout.strip())
+                return duration
+        except Exception as e:
+            logger.warning(f"Could not get video duration: {e}")
+        return None
     
     @staticmethod
     def check_ffmpeg() -> bool:
@@ -585,15 +761,21 @@ class VideoProcessor:
         if not settings:
             settings = {}
         
-        # Use ASS subtitle for advanced styling
+        # Escape path properly for ffmpeg (handle spaces, special chars)
+        # Use single quotes for paths with spaces
+        subtitle_path_escaped = subtitle_path.replace("'", "'\\''")
+        subtitle_path_escaped = f"'{subtitle_path_escaped}'"
+        
+        # Use ASS subtitle for advanced styling (preferred)
         if subtitle_path.endswith('.ass'):
-            # For ASS files, use ass filter
-            return f"ass='{subtitle_path}'"
+            # For ASS files, use ass filter with proper escaping
+            return f"ass={subtitle_path_escaped}"
         
-        # For SRT files, use subtitles filter with styling
-        filter_parts = [f"subtitles='{subtitle_path}'"]
+        # For SRT files, convert to ASS first or use subtitles filter
+        # Use subtitles filter with styling options
+        filter_str = f"subtitles={subtitle_path_escaped}"
         
-        # Add styling options
+        # Add styling via force_style parameter
         style_options = []
         
         # Font settings - Use Arabic-compatible fonts
@@ -609,17 +791,28 @@ class VideoProcessor:
         style_options.append(f"FontName={font_name}")
         
         if settings.get('font_size'):
-            style_options.append(f"FontSize={settings['font_size']}")
+            style_options.append(f"FontSize={int(settings['font_size'])}")
         
-        # Colors (need to be in ASS format)
+        # Colors (need to be in ASS format: &HAABBGGRR)
         if settings.get('font_color'):
             color = settings['font_color'].replace('#', '')
-            style_options.append(f"PrimaryColour=&H00{color[-2:]}{color[2:4]}{color[:2]}")
+            if len(color) == 6:
+                # Convert RGB to BGR for ASS
+                r = color[0:2]
+                g = color[2:4]
+                b = color[4:6]
+                style_options.append(f"PrimaryColour=&H00{b}{g}{r}")
         
         if settings.get('bg_color'):
             bg_color = settings['bg_color'].replace('#', '')
-            opacity = settings.get('bg_opacity', 128)
-            style_options.append(f"BackColour=&H{hex(opacity)[2:]:0>2}{bg_color[-2:]}{bg_color[2:4]}{bg_color[:2]}")
+            opacity = int(settings.get('bg_opacity', 180))
+            if len(bg_color) == 6:
+                r = bg_color[0:2]
+                g = bg_color[2:4]
+                b = bg_color[4:6]
+                # Format: &HAABBGGRR where AA is opacity
+                opacity_hex = format(opacity, '02X')
+                style_options.append(f"BackColour=&H{opacity_hex}{b}{g}{r}")
         
         # Position
         alignment = {
@@ -630,46 +823,62 @@ class VideoProcessor:
         style_options.append(f"Alignment={alignment}")
         
         if style_options:
-            filter_parts.append(f"force_style='{','.join(style_options)}'")
+            style_str = ','.join(style_options)
+            filter_str = f"{filter_str}:force_style='{style_str}'"
         
-        return ':'.join(filter_parts)
+        return filter_str
     
     @staticmethod
-    def get_quality_settings(quality: str) -> List[str]:
+    def get_quality_settings(quality: str, use_filter: bool = False) -> List[str]:
         """الحصول على إعدادات الجودة لـ ffmpeg"""
         
-        if quality == 'original':
-            return ['-c:v', 'copy']  # No re-encoding
+        # If using filter (subtitle), we MUST re-encode, cannot use copy
+        if quality == 'original' and not use_filter:
+            return ['-c:v', 'copy']  # No re-encoding (only when no filter)
+        elif quality == 'original' and use_filter:
+            # When using filter, use fast preset for speed while maintaining quality
+            return [
+                '-c:v', 'libx264',
+                '-preset', 'veryfast',  # Faster than 'slow' but still good quality
+                '-crf', '20',  # Slightly higher than 18 for speed, still excellent quality
+                '-profile:v', 'high',
+                '-level', '4.1',
+                '-pix_fmt', 'yuv420p',
+                '-threads', '0'  # Use all CPU cores
+            ]
         elif quality == 'high':
             return [
                 '-c:v', 'libx264',
-                '-preset', 'slow',
-                '-crf', '18',
+                '-preset', 'fast',  # Faster preset
+                '-crf', '20',  # Good quality
                 '-profile:v', 'high',
                 '-level', '4.1',
-                '-pix_fmt', 'yuv420p'
+                '-pix_fmt', 'yuv420p',
+                '-threads', '0'
             ]
         elif quality == 'medium':
             return [
                 '-c:v', 'libx264',
-                '-preset', 'medium',
+                '-preset', 'fast',  # Faster preset
                 '-crf', '23',
                 '-profile:v', 'main',
                 '-level', '4.0',
-                '-pix_fmt', 'yuv420p'
+                '-pix_fmt', 'yuv420p',
+                '-threads', '0'
             ]
         elif quality == 'low':
             return [
                 '-c:v', 'libx264',
-                '-preset', 'fast',
+                '-preset', 'ultrafast',  # Fastest preset
                 '-crf', '28',
                 '-profile:v', 'baseline',
                 '-level', '3.1',
                 '-pix_fmt', 'yuv420p',
-                '-vf', 'scale=w=min(iw\\,1280):h=-2'  # Max width 1280
+                '-vf', 'scale=w=min(iw\\,1280):h=-2',  # Max width 1280
+                '-threads', '0'
             ]
         else:
-            return ['-c:v', 'libx264', '-crf', '23']
+            return ['-c:v', 'libx264', '-crf', '23', '-preset', 'fast', '-threads', '0']
 
 # Initialize downloader
 downloader = EnhancedDownloader()
@@ -682,12 +891,97 @@ def index():
                          whisper_available=WHISPER_AVAILABLE,
                          translator_available=TRANSLATOR_AVAILABLE)
 
+@app.route('/api/get-video-thumbnail', methods=['POST'])
+def api_get_video_thumbnail():
+    """استخراج صورة مصغرة من الفيديو للمعاينة مع معلومات المقاسات"""
+    try:
+        data = request.json
+        # Get video file path
+        video_file = data.get('video_file') or session.get('video_file')
+        
+        # Handle relative paths
+        if video_file and not os.path.isabs(video_file):
+            # Remove 'downloads/' prefix if present
+            normalized = video_file.replace('downloads/', '').replace('downloads\\', '')
+            possible_paths = [
+                os.path.join(app.config['DOWNLOAD_FOLDER'], normalized),
+                os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file)),
+                os.path.join(app.config['UPLOAD_FOLDER'], normalized),
+                os.path.join(app.config['UPLOAD_FOLDER'], os.path.basename(video_file)),
+                video_file,
+                normalized
+            ]
+            for path in possible_paths:
+                abs_path = os.path.abspath(path)
+                if os.path.exists(abs_path):
+                    video_file = abs_path
+                    break
+        
+        if not video_file or not os.path.exists(video_file):
+            return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
+        
+        # Check if ffmpeg is available
+        if not VideoProcessor.check_ffmpeg():
+            return jsonify({'success': False, 'message': 'ffmpeg غير متوفر'}), 503
+        
+        # Get video dimensions using ffprobe
+        dimensions = VideoProcessor.get_video_dimensions(video_file)
+        
+        # Generate thumbnail filename
+        thumbnail_filename = f"thumb_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        thumbnail_path = os.path.join(app.config['OUTPUT_FOLDER'], thumbnail_filename)
+        
+        # Extract thumbnail using ffmpeg (at 1 second or middle of video) with optimized settings
+        cmd = [
+            'ffmpeg',
+            '-i', video_file,
+            '-ss', '00:00:01',  # At 1 second
+            '-vframes', '1',
+            '-vf', 'scale=640:-1',  # Scale to 640px width, maintain aspect ratio
+            '-threads', '0',  # Use all CPU threads
+            '-y',
+            thumbnail_path
+        ]
+        
+        process = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if process.returncode == 0 and os.path.exists(thumbnail_path):
+            return jsonify({
+                'success': True,
+                'thumbnail_url': f'/download/{thumbnail_filename}',
+                'thumbnail_path': thumbnail_path,
+                'dimensions': dimensions  # Return video dimensions
+            })
+        else:
+            return jsonify({'success': False, 'message': 'فشل استخراج الصورة المصغرة'}), 500
+            
+    except Exception as e:
+        logger.error(f"Thumbnail extraction error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/api/instant-translate', methods=['POST'])
 def api_instant_translate():
     """API للترجمة الفورية - معالجة الخطوات المتعددة"""
     try:
         data = request.json
+        
+        if not data:
+            logger.error("No JSON data received")
+            return jsonify({'success': False, 'message': 'لا توجد بيانات في الطلب'}), 400
+        
         step = data.get('step')
+        
+        if not step:
+            logger.error(f"Missing 'step' parameter. Received data: {data}")
+            return jsonify({'success': False, 'message': 'خطوة غير محددة. يرجى تحديد step'}), 400
+        
+        logger.info(f"Processing step: {step}, data keys: {list(data.keys())}")
         
         if step == 'download':
             # Step 1: Download video
@@ -708,10 +1002,33 @@ def api_instant_translate():
             
             if result['success']:
                 # Store file path in session or temp storage
-                session['video_file'] = result['file']
+                video_file = result['file']
+                
+                # Normalize path - handle cases where path might already include DOWNLOAD_FOLDER
+                if os.path.isabs(video_file):
+                    full_path = video_file
+                else:
+                    # Check if path already starts with downloads folder name
+                    if video_file.startswith('downloads/') or video_file.startswith('downloads\\'):
+                        # Remove the prefix and join properly
+                        video_file = video_file.replace('downloads/', '').replace('downloads\\', '')
+                    full_path = os.path.join(app.config['DOWNLOAD_FOLDER'], video_file)
+                
+                # Normalize the path to handle any double slashes or issues
+                full_path = os.path.normpath(full_path)
+                
+                # Verify file exists
+                if not os.path.exists(full_path):
+                    # Try to find the file
+                    if os.path.exists(video_file):
+                        full_path = os.path.abspath(video_file)
+                    elif os.path.exists(os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file))):
+                        full_path = os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file))
+                
+                session['video_file'] = full_path
                 return jsonify({
                     'success': True,
-                    'file': result['file'],
+                    'file': full_path,
                     'info': result['info']
                 })
             else:
@@ -721,31 +1038,64 @@ def api_instant_translate():
             # Step 2: Extract audio from video
             video_file = data.get('video_file') or session.get('video_file')
             
-            if not video_file or not os.path.exists(video_file):
-                return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
+            # Normalize and resolve path
+            if video_file:
+                # If it's already absolute, use it
+                if os.path.isabs(video_file):
+                    video_file = os.path.normpath(video_file)
+                else:
+                    # Remove any 'downloads/' prefix if present
+                    normalized = video_file.replace('downloads/', '').replace('downloads\\', '')
+                    
+                    # Try different possible locations
+                    possible_paths = [
+                        os.path.join(app.config['DOWNLOAD_FOLDER'], normalized),
+                        os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file)),
+                        os.path.join(app.config['UPLOAD_FOLDER'], normalized),
+                        os.path.join(app.config['UPLOAD_FOLDER'], os.path.basename(video_file)),
+                        video_file,
+                        normalized
+                    ]
+                    
+                    for path in possible_paths:
+                        abs_path = os.path.abspath(path)
+                        if os.path.exists(abs_path):
+                            video_file = abs_path
+                            break
             
-            # Extract audio using ffmpeg
+            if not video_file or not os.path.exists(video_file):
+                logger.error(f"Video file not found: {video_file}")
+                logger.error(f"Download folder: {app.config['DOWNLOAD_FOLDER']}")
+                logger.error(f"Files in download folder: {os.listdir(app.config['DOWNLOAD_FOLDER']) if os.path.exists(app.config['DOWNLOAD_FOLDER']) else 'Folder does not exist'}")
+                return jsonify({'success': False, 'message': f'ملف الفيديو غير موجود: {video_file}'}), 400
+            
+            # Extract audio using ffmpeg with optimized settings for speed
             audio_file = video_file.rsplit('.', 1)[0] + '_audio.wav'
             
             cmd = [
-                'ffmpeg', '-i', video_file,
+                'ffmpeg',
+                '-i', video_file,
                 '-vn',  # No video
                 '-acodec', 'pcm_s16le',  # WAV format for Whisper
-                '-ar', '16000',  # 16kHz sample rate
+                '-ar', '16000',  # 16kHz sample rate (Whisper requirement)
                 '-ac', '1',  # Mono
+                '-threads', '0',  # Use all available CPU threads
                 '-y',  # Overwrite
                 audio_file
             ]
             
             try:
-                subprocess.run(cmd, check=True, capture_output=True)
+                result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
                 session['audio_file'] = audio_file
                 return jsonify({
                     'success': True,
                     'audio_file': audio_file
                 })
             except subprocess.CalledProcessError as e:
-                return jsonify({'success': False, 'message': f'خطأ في استخراج الصوت: {e}'}), 500
+                logger.error(f"FFmpeg error: {e.stderr}")
+                return jsonify({'success': False, 'message': f'خطأ في استخراج الصوت: {e.stderr}'}), 500
+            except subprocess.TimeoutExpired:
+                return jsonify({'success': False, 'message': 'انتهت مهلة استخراج الصوت'}), 500
                 
         elif step == 'transcribe':
             # Step 3: Transcribe audio
@@ -762,22 +1112,39 @@ def api_instant_translate():
             # Load Whisper model
             model = whisper.load_model(model_size)
             
-            # Transcribe
+            # Detect if GPU is available for FP16
+            import torch
+            use_fp16 = torch.cuda.is_available()  # Only use FP16 if GPU is available
+            
+            # Transcribe with optimized settings for speed
             options = {
                 'language': None if language == 'auto' else language,
                 'task': 'transcribe',
-                'fp16': False
+                'fp16': use_fp16,  # Use FP16 only if GPU available, otherwise FP32
+                'beam_size': 3,  # Reduced from default 5 for speed
+                'best_of': 2,  # Reduced from default 5 for speed
+                'temperature': 0.0,  # Deterministic output
+                'compression_ratio_threshold': 2.4,
+                'logprob_threshold': -1.0,
+                'no_speech_threshold': 0.6,
+                'condition_on_previous_text': True,
+                'initial_prompt': None,
+                'word_timestamps': True  # Keep word timestamps for accurate subtitles
             }
             
             result = model.transcribe(audio_file, **options)
             
             session['transcript'] = result['text']
             session['source_language'] = result.get('language', language)
+            # Store segments for accurate subtitle timing
+            if 'segments' in result:
+                session['whisper_segments'] = result['segments']
             
             return jsonify({
                 'success': True,
                 'text': result['text'],
-                'language': result.get('language', language)
+                'language': result.get('language', language),
+                'segments': result.get('segments', [])  # Return segments to frontend
             })
             
         elif step == 'translate':
@@ -806,6 +1173,19 @@ def api_instant_translate():
             video_file = data.get('video_file') or session.get('video_file')
             subtitle_text = data.get('subtitle_text') or session.get('translated_text')
             settings = data.get('settings', {})
+            quality = data.get('quality', 'original')  # Get quality from request
+            
+            # Handle relative paths
+            if video_file and not os.path.isabs(video_file):
+                possible_paths = [
+                    os.path.join(app.config['DOWNLOAD_FOLDER'], video_file),
+                    os.path.join(app.config['UPLOAD_FOLDER'], video_file),
+                    video_file
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        video_file = path
+                        break
             
             if not video_file or not os.path.exists(video_file):
                 return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
@@ -813,23 +1193,113 @@ def api_instant_translate():
             if not subtitle_text:
                 return jsonify({'success': False, 'message': 'لا يوجد نص للترجمة'}), 400
             
-            # Create SRT file
-            srt_content = SubtitleProcessor.create_srt(subtitle_text)
+            # Get video duration for accurate subtitle timing
+            video_duration = VideoProcessor.get_video_duration(video_file)
+            
+            # Get Whisper segments if available (for accurate timing)
+            whisper_segments = session.get('whisper_segments', None)
+            original_text = session.get('transcript', '')
+            
+            # Create SRT file with accurate timing
+            if whisper_segments and len(whisper_segments) > 0:
+                # Use Whisper segments for precise timing
+                # IMPORTANT: Translate each segment individually for better accuracy
+                segments_for_srt = []
+                
+                logger.info(f"Processing {len(whisper_segments)} Whisper segments")
+                
+                # Translate each segment individually to maintain timing accuracy
+                translator = GoogleTranslator(source=session.get('source_language', 'auto'), target='ar')
+                
+                for i, segment in enumerate(whisper_segments):
+                    # Use original timing from Whisper (these are accurate)
+                    start_time = float(segment.get('start', 0))
+                    end_time = float(segment.get('end', start_time + 3))
+                    
+                    # Get original segment text
+                    original_segment_text = segment.get('text', '').strip()
+                    
+                    if not original_segment_text:
+                        continue
+                    
+                    # Translate this segment individually
+                    try:
+                        translated_segment_text = translator.translate(original_segment_text)
+                        logger.info(f"Segment {i+1}/{len(whisper_segments)}: {start_time:.2f}s-{end_time:.2f}s")
+                    except Exception as e:
+                        logger.warning(f"Translation failed for segment {i+1}, using original: {e}")
+                        # Fallback: use ratio-based translation
+                        if original_text:
+                            original_words = original_text.split()
+                            translated_words = subtitle_text.split()
+                            if len(original_words) > 0:
+                                word_ratio = len(translated_words) / len(original_words)
+                                segment_words = original_segment_text.split()
+                                translated_words_count = max(1, int(len(segment_words) * word_ratio))
+                                # Estimate position in full text
+                                words_before = len(original_text[:original_text.find(original_segment_text)].split())
+                                start_idx = int(words_before * word_ratio)
+                                end_idx = min(start_idx + translated_words_count, len(translated_words))
+                                translated_segment_text = ' '.join(translated_words[start_idx:end_idx])
+                            else:
+                                translated_segment_text = original_segment_text
+                        else:
+                            translated_segment_text = original_segment_text
+                    
+                    if translated_segment_text.strip():
+                        segments_for_srt.append({
+                            'start': start_time,
+                            'end': end_time,
+                            'text': translated_segment_text.strip()
+                        })
+                
+                # If we have segments, use them
+                if segments_for_srt:
+                    logger.info(f"Created {len(segments_for_srt)} subtitle segments with precise timing")
+                    srt_content = SubtitleProcessor.create_srt(
+                        subtitle_text, 
+                        duration=video_duration,
+                        segments=segments_for_srt
+                    )
+                else:
+                    logger.warning("No segments created, falling back to calculated timing")
+                    # Fallback: create SRT with calculated timing
+                    srt_content = SubtitleProcessor.create_srt(
+                        subtitle_text,
+                        duration=video_duration
+                    )
+            else:
+                logger.warning("No Whisper segments available, using calculated timing")
+                # Fallback: create SRT with calculated timing
+                srt_content = SubtitleProcessor.create_srt(
+                    subtitle_text,
+                    duration=video_duration
+                )
+            
             srt_filename = f"instant_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
             srt_path = os.path.join(app.config['SUBTITLE_FOLDER'], srt_filename)
             
             with open(srt_path, 'w', encoding='utf-8') as f:
                 f.write(srt_content)
             
-            # Create ASS file with styling
+            # Create ASS file with styling (use settings from request)
+            font_size = int(settings.get('font_size', 22))
+            font_color = settings.get('font_color', '#FFFFFF')
+            bg_color = settings.get('bg_color', '#000000')
+            bg_opacity = int(settings.get('bg_opacity', 180))
+            position = settings.get('position', 'bottom')
+            font_name = settings.get('font_name', 'Arial')
+            vertical_offset = int(settings.get('vertical_offset', 0))
+            
             ass_content = SubtitleProcessor.create_ass_subtitle(
                 srt_content,
-                font_size=int(settings.get('font_size', 22)),
-                font_color=settings.get('font_color', '#FFFFFF').replace('#', ''),
-                bg_color='000000',
-                bg_opacity=180,
-                position=settings.get('position', 'bottom'),
-                font_name=settings.get('font_name', 'Arial')
+                font_size=font_size,
+                font_color=font_color.replace('#', ''),
+                bg_color=bg_color.replace('#', ''),
+                bg_opacity=bg_opacity,
+                position=position,
+                font_name=font_name,
+                vertical_offset=vertical_offset
             )
             
             ass_path = srt_path.replace('.srt', '.ass')
@@ -840,13 +1310,23 @@ def api_instant_translate():
             output_filename = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
             output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
             
-            # Merge subtitle with video
+            # Prepare subtitle settings dict for merge
+            subtitle_settings = {
+                'font_name': font_name,
+                'font_size': font_size,
+                'font_color': font_color,
+                'bg_color': bg_color,
+                'bg_opacity': bg_opacity,
+                'position': position
+            }
+            
+            # Merge subtitle with video (use quality from request)
             result = VideoProcessor.merge_subtitles(
                 video_file,
                 ass_path,
                 output_path,
-                quality='medium',
-                subtitle_settings=settings
+                quality=quality,
+                subtitle_settings=subtitle_settings
             )
             
             if result['success']:
@@ -867,10 +1347,12 @@ def api_instant_translate():
                 return jsonify({'success': False, 'message': result['message']}), 500
                 
         else:
-            return jsonify({'success': False, 'message': 'خطوة غير صحيحة'}), 400
+            logger.error(f"Unknown step: {step}")
+            return jsonify({'success': False, 'message': f'خطوة غير صحيحة: {step}'}), 400
             
     except Exception as e:
         logger.error(f"Instant translate error: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/smart-translate', methods=['POST'])
@@ -923,10 +1405,23 @@ def api_smart_translate():
         
         try:
             import whisper
+            import torch
             model = whisper.load_model(whisper_model)
             
-            # Transcribe directly from video
-            transcribe_result = model.transcribe(video_path, language=None, task='transcribe')
+            # Detect if GPU is available for FP16
+            use_fp16 = torch.cuda.is_available()
+            
+            # Transcribe directly from video with optimized settings
+            transcribe_options = {
+                'language': None,
+                'task': 'transcribe',
+                'fp16': use_fp16,  # Use FP16 only if GPU available
+                'beam_size': 3,  # Reduced for speed
+                'best_of': 2,  # Reduced for speed
+                'temperature': 0.0,
+                'word_timestamps': True
+            }
+            transcribe_result = model.transcribe(video_path, **transcribe_options)
             original_text = transcribe_result['text']
             detected_language = transcribe_result.get('language', 'en')
             
@@ -1126,11 +1621,19 @@ def api_transcribe():
         model_size = request.form.get('model', 'base')
         model = whisper.load_model(model_size)
         
-        # Transcribe
+        # Detect if GPU is available for FP16
+        import torch
+        use_fp16 = torch.cuda.is_available()
+        
+        # Transcribe with optimized settings for speed
         options = {
             'language': None if language == 'auto' else language,
             'task': 'transcribe',
-            'fp16': False
+            'fp16': use_fp16,  # Use FP16 only if GPU available
+            'beam_size': 3,  # Reduced from default 5 for speed
+            'best_of': 2,  # Reduced from default 5 for speed
+            'temperature': 0.0,  # Deterministic output
+            'word_timestamps': True
         }
         
         result = model.transcribe(filepath, **options)
@@ -1156,6 +1659,110 @@ def api_transcribe():
     except Exception as e:
         logger.error(f"Transcribe error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/transcribe-from-url', methods=['POST'])
+def api_transcribe_from_url():
+    """تحميل الفيديو من رابط وتحويله إلى نص"""
+    if not WHISPER_AVAILABLE:
+        return jsonify({'success': False, 'message': 'Whisper غير متوفر'}), 503
+    
+    try:
+        data = request.json
+        url = data.get('url')
+        quality = data.get('quality', '720p')
+        language = data.get('language', 'auto')
+        model_size = data.get('model', 'base')
+        
+        if not url:
+            return jsonify({'success': False, 'message': 'يرجى إدخال رابط الفيديو'}), 400
+        
+        logger.info(f"Transcribing from URL: {url}")
+        
+        # Step 1: Download video
+        quality_map = {
+            'best': 'best',
+            '720p': 'bestvideo[height<=720]+bestaudio/best[height<=720]',
+            '480p': 'bestvideo[height<=480]+bestaudio/best[height<=480]'
+        }
+        
+        download_result = downloader.download_with_ytdlp(url, quality_map.get(quality, '720p'))
+        
+        if not download_result['success']:
+            return jsonify({'success': False, 'message': f'فشل تحميل الفيديو: {download_result["message"]}'}), 400
+        
+        video_file = download_result['file']
+        
+        # Normalize path
+        if not os.path.isabs(video_file):
+            if video_file.startswith('downloads/') or video_file.startswith('downloads\\'):
+                video_file = video_file.replace('downloads/', '').replace('downloads\\', '')
+            full_path = os.path.join(app.config['DOWNLOAD_FOLDER'], video_file)
+        else:
+            full_path = video_file
+        
+        full_path = os.path.normpath(full_path)
+        
+        if not os.path.exists(full_path):
+            # Try to find the file
+            basename = os.path.basename(video_file)
+            possible_paths = [
+                os.path.join(app.config['DOWNLOAD_FOLDER'], basename),
+                full_path
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    full_path = path
+                    break
+        
+        if not os.path.exists(full_path):
+            return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود بعد التحميل'}), 400
+        
+        logger.info(f"Video downloaded to: {full_path}")
+        
+        # Step 2: Load Whisper model and transcribe
+        import whisper
+        import torch
+        
+        model = whisper.load_model(model_size)
+        use_fp16 = torch.cuda.is_available()
+        
+        # Transcribe directly from video file
+        transcribe_options = {
+            'language': None if language == 'auto' else language,
+            'task': 'transcribe',
+            'fp16': use_fp16,
+            'beam_size': 3,
+            'best_of': 2,
+            'temperature': 0.0,
+            'word_timestamps': True
+        }
+        
+        logger.info("Starting transcription...")
+        result = model.transcribe(full_path, **transcribe_options)
+        
+        # Create SRT file
+        video_basename = os.path.splitext(os.path.basename(full_path))[0]
+        srt_content = SubtitleProcessor.create_srt(result['text'])
+        srt_filename = f"{video_basename}_transcribed.srt"
+        srt_path = os.path.join(app.config['SUBTITLE_FOLDER'], srt_filename)
+        
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            f.write(srt_content)
+        
+        logger.info(f"Transcription completed. Text length: {len(result['text'])}")
+        
+        return jsonify({
+            'success': True,
+            'text': result['text'],
+            'language': result.get('language', language),
+            'srt_file': srt_filename,
+            'video_title': download_result.get('info', {}).get('title', 'Video')
+        })
+        
+    except Exception as e:
+        logger.error(f"Transcribe from URL error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': f'خطأ في التحويل: {str(e)}'}), 500
 
 @app.route('/api/translate', methods=['POST'])
 def api_translate():
@@ -1304,6 +1911,95 @@ def api_create_subtitle():
         
     except Exception as e:
         logger.error(f"Create subtitle error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/storage-info', methods=['GET'])
+def api_storage_info():
+    """الحصول على معلومات الحجم المستخدم"""
+    try:
+        total_size = 0
+        
+        # Calculate size for each folder
+        folders = [
+            app.config['DOWNLOAD_FOLDER'],
+            app.config['UPLOAD_FOLDER'],
+            app.config['OUTPUT_FOLDER'],
+            app.config['SUBTITLE_FOLDER']
+        ]
+        
+        for folder in folders:
+            if os.path.exists(folder):
+                for root, dirs, files in os.walk(folder):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        try:
+                            total_size += os.path.getsize(file_path)
+                        except:
+                            pass
+        
+        # Convert to MB
+        size_mb = total_size / (1024 * 1024)
+        
+        return jsonify({
+            'success': True,
+            'size_bytes': total_size,
+            'size_mb': round(size_mb, 2),
+            'size_gb': round(size_mb / 1024, 2)
+        })
+    except Exception as e:
+        logger.error(f"Storage info error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/cleanup-files', methods=['POST'])
+def api_cleanup_files():
+    """حذف الملفات المحملة/المرفوعة/المترجمة"""
+    try:
+        data = request.json
+        cleanup_type = data.get('type', 'all')  # 'downloads', 'uploads', 'outputs', 'subtitles', 'all'
+        
+        deleted_count = 0
+        deleted_size = 0
+        
+        folders_to_clean = []
+        
+        if cleanup_type == 'all':
+            folders_to_clean = [
+                app.config['DOWNLOAD_FOLDER'],
+                app.config['UPLOAD_FOLDER'],
+                app.config['OUTPUT_FOLDER'],
+                app.config['SUBTITLE_FOLDER']
+            ]
+        elif cleanup_type == 'downloads':
+            folders_to_clean = [app.config['DOWNLOAD_FOLDER']]
+        elif cleanup_type == 'uploads':
+            folders_to_clean = [app.config['UPLOAD_FOLDER']]
+        elif cleanup_type == 'outputs':
+            folders_to_clean = [app.config['OUTPUT_FOLDER']]
+        elif cleanup_type == 'subtitles':
+            folders_to_clean = [app.config['SUBTITLE_FOLDER']]
+        
+        for folder in folders_to_clean:
+            if os.path.exists(folder):
+                for root, dirs, files in os.walk(folder):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        try:
+                            file_size = os.path.getsize(file_path)
+                            os.remove(file_path)
+                            deleted_count += 1
+                            deleted_size += file_size
+                        except Exception as e:
+                            logger.warning(f"Could not delete {file_path}: {e}")
+        
+        deleted_mb = deleted_size / (1024 * 1024)
+        
+        return jsonify({
+            'success': True,
+            'deleted_count': deleted_count,
+            'deleted_size_mb': round(deleted_mb, 2)
+        })
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/download/<path:filename>')
