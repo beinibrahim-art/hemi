@@ -33,6 +33,14 @@ except ImportError:
     print("⚠️ Whisper غير متوفر - لن يعمل تحويل الكلام إلى نص")
 
 try:
+    from faster_whisper import WhisperModel
+    FASTER_WHISPER_AVAILABLE = True
+    print("✅ Faster Whisper متوفر - سيتم استخدامه (أسرع بـ 4-5x)")
+except ImportError:
+    FASTER_WHISPER_AVAILABLE = False
+    print("⚠️ Faster Whisper غير متوفر - سيتم استخدام Whisper العادي")
+
+try:
     from deep_translator import GoogleTranslator
     TRANSLATOR_AVAILABLE = True
 except ImportError:
@@ -66,6 +74,111 @@ logger = logging.getLogger(__name__)
 # إنشاء المجلدات المطلوبة
 for folder in ['uploads', 'downloads', 'outputs', 'subtitles', 'templates', 'static']:
     Path(folder).mkdir(exist_ok=True)
+
+
+def transcribe_audio(audio_file: str, model_size: str = 'base', language: str = 'auto', use_faster: bool = True):
+    """
+    تحويل الصوت إلى نص باستخدام Faster Whisper أو Whisper العادي
+    
+    Args:
+        audio_file: مسار ملف الصوت
+        model_size: حجم النموذج (tiny, base, small, medium, large)
+        language: اللغة (auto للكشف التلقائي)
+        use_faster: استخدام Faster Whisper إذا كان متاحاً
+    
+    Returns:
+        dict: {'text': str, 'language': str, 'segments': list}
+    """
+    # محاولة استخدام Faster Whisper أولاً (أسرع بـ 4-5x)
+    if use_faster and FASTER_WHISPER_AVAILABLE:
+        try:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            compute_type = "float16" if device == "cuda" else "int8"
+            
+            logger.info(f"استخدام Faster Whisper مع device: {device}, compute_type: {compute_type}")
+            model = WhisperModel(model_size, device=device, compute_type=compute_type)
+            
+            # تحويل اللغة
+            language_code = None if language == 'auto' else language
+            
+            # تحويل الصوت إلى نص
+            segments, info = model.transcribe(
+                audio_file,
+                language=language_code,
+                beam_size=5,
+                word_timestamps=True,
+                vad_filter=True,  # إزالة الضوضاء
+                vad_parameters=dict(min_silence_duration_ms=500)
+            )
+            
+            # تجميع النص والـ segments
+            full_text = ""
+            segments_list = []
+            
+            for segment in segments:
+                segment_text = segment.text.strip()
+                if segment_text:
+                    full_text += segment_text + " "
+                    segments_list.append({
+                        'id': len(segments_list) + 1,
+                        'start': segment.start,
+                        'end': segment.end,
+                        'text': segment_text,
+                        'words': [
+                            {
+                                'word': word.word,
+                                'start': word.start,
+                                'end': word.end
+                            }
+                            for word in segment.words
+                        ] if hasattr(segment, 'words') else []
+                    })
+            
+            detected_language = info.language if hasattr(info, 'language') else language
+            
+            logger.info(f"تم التحويل بنجاح باستخدام Faster Whisper - اللغة المكتشفة: {detected_language}")
+            
+            return {
+                'text': full_text.strip(),
+                'language': detected_language,
+                'segments': segments_list
+            }
+        except Exception as e:
+            logger.warning(f"فشل استخدام Faster Whisper: {e} - سيتم استخدام Whisper العادي")
+            # الاستمرار إلى Whisper العادي
+    
+    # استخدام Whisper العادي كـ fallback
+    if WHISPER_AVAILABLE:
+        try:
+            logger.info("استخدام Whisper العادي")
+            model = whisper.load_model(model_size)
+            
+            import torch
+            use_fp16 = torch.cuda.is_available()
+            
+            options = {
+                'language': None if language == 'auto' else language,
+                'task': 'transcribe',
+                'fp16': use_fp16,
+                'beam_size': 5,
+                'best_of': 5,
+                'temperature': 0.0,
+                'word_timestamps': True
+            }
+            
+            result = model.transcribe(audio_file, **options)
+            
+            return {
+                'text': result['text'],
+                'language': result.get('language', language),
+                'segments': result.get('segments', [])
+            }
+        except Exception as e:
+            logger.error(f"فشل استخدام Whisper: {e}")
+            raise Exception(f"فشل تحويل الصوت إلى نص: {str(e)}")
+    else:
+        raise Exception("لا توجد مكتبة متاحة لتحويل الصوت إلى نص")
 
 
 class VideoDownloader:
@@ -896,22 +1009,8 @@ def api_instant_translate():
             if not audio_file or not os.path.exists(audio_file):
                 return jsonify({'success': False, 'message': 'ملف الصوت غير موجود'}), 400
             
-            model = whisper.load_model(model_size)
-            
-            import torch
-            use_fp16 = torch.cuda.is_available()
-            
-            options = {
-                'language': None if language == 'auto' else language,
-                'task': 'transcribe',
-                'fp16': use_fp16,
-                'beam_size': 3,
-                'best_of': 2,
-                'temperature': 0.0,
-                'word_timestamps': True
-            }
-            
-            result = model.transcribe(audio_file, **options)
+            # استخدام الدالة المساعدة التي تستخدم Faster Whisper تلقائياً
+            result = transcribe_audio(audio_file, model_size, language, use_faster=True)
             
             # حفظ في ملف مؤقت بدلاً من session
             temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
@@ -1229,8 +1328,8 @@ def api_get_video_thumbnail():
 @app.route('/api/transcribe-from-url', methods=['POST'])
 def api_transcribe_from_url():
     """تحويل الفيديو من رابط إلى نص"""
-    if not WHISPER_AVAILABLE:
-        return jsonify({'success': False, 'message': 'Whisper غير متوفر'}), 503
+    if not WHISPER_AVAILABLE and not FASTER_WHISPER_AVAILABLE:
+        return jsonify({'success': False, 'message': 'لا توجد مكتبة متاحة لتحويل الصوت إلى نص'}), 503
     
     try:
         data = request.json
@@ -1279,22 +1378,7 @@ def api_transcribe_from_url():
             return jsonify({'success': False, 'message': 'انتهت مهلة استخراج الصوت'}), 500
         
         # تحويل الصوت إلى نص
-        model = whisper.load_model(model_size)
-        
-        import torch
-        use_fp16 = torch.cuda.is_available()
-        
-        options = {
-            'language': None if language == 'auto' else language,
-            'task': 'transcribe',
-            'fp16': use_fp16,
-            'beam_size': 3,
-            'best_of': 2,
-            'temperature': 0.0,
-            'word_timestamps': True
-        }
-        
-        result = model.transcribe(audio_file, **options)
+        result = transcribe_audio(audio_file, model_size, language, use_faster=True)
         
         # إنشاء ملف SRT
         srt_content = SubtitleProcessor.create_srt(
@@ -1333,8 +1417,8 @@ def api_transcribe_from_url():
 @app.route('/api/transcribe', methods=['POST'])
 def api_transcribe():
     """تحويل الصوت/الفيديو إلى نص"""
-    if not WHISPER_AVAILABLE:
-        return jsonify({'success': False, 'message': 'Whisper غير متوفر'}), 503
+    if not WHISPER_AVAILABLE and not FASTER_WHISPER_AVAILABLE:
+        return jsonify({'success': False, 'message': 'لا توجد مكتبة متاحة لتحويل الصوت إلى نص'}), 503
     
     try:
         if 'file' not in request.files:
@@ -1351,22 +1435,9 @@ def api_transcribe():
         file.save(filepath)
         
         model_size = request.form.get('model', 'base')
-        model = whisper.load_model(model_size)
         
-        import torch
-        use_fp16 = torch.cuda.is_available()
-        
-        options = {
-            'language': None if language == 'auto' else language,
-            'task': 'transcribe',
-            'fp16': use_fp16,
-            'beam_size': 3,
-            'best_of': 2,
-            'temperature': 0.0,
-            'word_timestamps': True
-        }
-        
-        result = model.transcribe(filepath, **options)
+        # استخدام الدالة المساعدة التي تستخدم Faster Whisper تلقائياً
+        result = transcribe_audio(filepath, model_size, language, use_faster=True)
         
         # إنشاء ملف SRT مع segments
         srt_content = SubtitleProcessor.create_srt(
@@ -1772,6 +1843,7 @@ if __name__ == '__main__':
     print("🎬 التطبيق المتكامل للترجمة والتحميل v5.0")
     print("="*60)
     print(f"✅ Whisper: {'متوفر' if WHISPER_AVAILABLE else 'غير متوفر'}")
+    print(f"✅ Faster Whisper: {'متوفر (سيتم استخدامه - أسرع بـ 4-5x)' if FASTER_WHISPER_AVAILABLE else 'غير متوفر'}")
     print(f"✅ المترجم: {'متوفر' if TRANSLATOR_AVAILABLE else 'غير متوفر'}")
     print(f"✅ FFmpeg: {'متوفر' if VideoProcessor.check_ffmpeg() else 'غير متوفر'}")
     print("\n🌐 الخادم يعمل على: http://localhost:5000")
