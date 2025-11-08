@@ -1859,9 +1859,39 @@
                 const response = await axios.post('/api/get-qualities', { url });
                 if (response.data.success) {
                     if (qualityLoading) qualityLoading.classList.add('hidden');
-                    displayQualities(response.data.qualities);
-                    if (response.data.title) {
-                        showAlert(`تم العثور على: ${response.data.title}`, 'success');
+                    
+                    // معالجة البيانات الجديدة من get_available_formats
+                    let qualities = response.data.qualities;
+                    
+                    // إذا كانت البيانات من API الجديد (get_available_formats)
+                    if (response.data.formats && response.data.formats.presets) {
+                        qualities = response.data.formats.presets.map(preset => ({
+                            id: preset.id,
+                            label: preset.name,
+                            description: preset.description,
+                            ext: preset.id === 'audio' ? 'mp3' : 'mp4',
+                            info: preset.description
+                        }));
+                        
+                        // إضافة التنسيقات الفردية أيضاً
+                        if (response.data.formats.video_audio) {
+                            response.data.formats.video_audio.forEach(format => {
+                                if (format.resolution && !qualities.find(q => q.id === format.resolution.toLowerCase())) {
+                                    qualities.push({
+                                        id: format.resolution.toLowerCase(),
+                                        label: format.resolution,
+                                        ext: 'mp4',
+                                        info: format.note || format.filesize || ''
+                                    });
+                                }
+                            });
+                        }
+                    }
+                    
+                    displayQualities(qualities);
+                    if (response.data.title || (response.data.info && response.data.info.title)) {
+                        const title = response.data.title || response.data.info.title;
+                        showAlert(`تم العثور على: ${title}`, 'success');
                     }
                 } else {
                     showAlert(response.data.message || 'فشل فحص الجودات', 'danger');
@@ -2028,27 +2058,95 @@
                     downloadStartBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> جاري التحميل...';
                 }
                 
-                const response = await axios.post('/api/download', {
+                // استخدام API الجديد مع تتبع التقدم
+                const formatCommand = selectedQuality === 'best' ? 'bestvideo+bestaudio/best' : 
+                                    selectedQuality === 'audio' ? 'audio' :
+                                    selectedQuality === '720p' || selectedQuality === 'medium' ? 'bestvideo[height<=720]+bestaudio/best[height<=720]' :
+                                    selectedQuality === '480p' || selectedQuality === 'low' ? 'bestvideo[height<=480]+bestaudio/best[height<=480]' :
+                                    selectedQuality.startsWith('1080p') ? 'bestvideo[height<=1080]+bestaudio/best[height<=1080]' :
+                                    selectedQuality.startsWith('1440p') ? 'bestvideo[height<=1440]+bestaudio/best[height<=1440]' :
+                                    selectedQuality.startsWith('2160p') || selectedQuality === '4k' ? 'bestvideo[height<=2160]+bestaudio/best[height<=2160]' :
+                                    selectedQuality;
+                
+                const isAudio = selectedQuality === 'audio';
+                
+                // بدء التحميل
+                const downloadResponse = await axios.post('/api/media/download', {
                     url: url,
-                    quality: selectedQuality
+                    format: formatCommand,
+                    audio_only: isAudio
                 });
                 
-                if (response.data.success) {
-                    showAlert('تم التحميل بنجاح!', 'success');
-                    const filePath = response.data.file;
-                    let downloadPath = filePath.replace('downloads/', '').replace('downloads\\', '');
-                    // تنظيف المسار
-                    if (downloadPath.includes('/') || downloadPath.includes('\\')) {
-                        downloadPath = downloadPath.split(/[/\\]/).pop();
-                    }
-                    window.location.href = `/download/${encodeURIComponent(downloadPath)}`;
+                if (downloadResponse.data.success && downloadResponse.data.download_id) {
+                    const downloadId = downloadResponse.data.download_id;
+                    
+                    // تتبع التقدم
+                    const progressInterval = setInterval(async () => {
+                        try {
+                            const progressResponse = await axios.get(`/api/media/progress/${downloadId}`);
+                            const progress = progressResponse.data;
+                            
+                            if (progress.status === 'completed') {
+                                clearInterval(progressInterval);
+                                if (downloadStartBtn) {
+                                    downloadStartBtn.innerHTML = '<i class="bi bi-check-circle"></i> تم التحميل!';
+                                }
+                                showAlert('تم التحميل بنجاح!', 'success');
+                                
+                                // البحث عن الملف المحمّل
+                                setTimeout(() => {
+                                    window.location.reload(); // إعادة تحميل الصفحة لعرض الملف الجديد
+                                }, 1000);
+                            } else if (progress.status === 'error') {
+                                clearInterval(progressInterval);
+                                if (downloadStartBtn) {
+                                    downloadStartBtn.disabled = false;
+                                    downloadStartBtn.innerHTML = '<i class="bi bi-download"></i> ابدأ التحميل';
+                                }
+                                showAlert(progress.message || 'فشل التحميل', 'danger');
+                            } else if (progress.status === 'downloading' || progress.status === 'starting') {
+                                const percent = progress.percent || '0%';
+                                const method = progress.method || '';
+                                if (downloadStartBtn) {
+                                    downloadStartBtn.innerHTML = `<i class="bi bi-hourglass-split"></i> ${percent} ${method ? '- ' + method : ''}`;
+                                }
+                            }
+                        } catch (error) {
+                            console.error('Progress check error:', error);
+                        }
+                    }, 1000); // التحقق كل ثانية
+                    
+                    // إيقاف التتبع بعد 5 دقائق كحد أقصى
+                    setTimeout(() => {
+                        clearInterval(progressInterval);
+                    }, 300000);
+                    
                 } else {
-                    showAlert(response.data.message || 'فشل التحميل', 'danger');
+                    // Fallback إلى API القديم
+                    const response = await axios.post('/api/download', {
+                        url: url,
+                        quality: selectedQuality
+                    });
+                    
+                    if (response.data.success) {
+                        showAlert('تم التحميل بنجاح!', 'success');
+                        const filePath = response.data.file;
+                        let downloadPath = filePath.replace('downloads/', '').replace('downloads\\', '');
+                        if (downloadPath.includes('/') || downloadPath.includes('\\')) {
+                            downloadPath = downloadPath.split(/[/\\]/).pop();
+                        }
+                        window.location.href = `/download/${encodeURIComponent(downloadPath)}`;
+                    } else {
+                        showAlert(response.data.message || 'فشل التحميل', 'danger');
+                        if (downloadStartBtn) {
+                            downloadStartBtn.disabled = false;
+                            downloadStartBtn.innerHTML = '<i class="bi bi-download"></i> ابدأ التحميل';
+                        }
+                    }
                 }
             } catch (error) {
                 console.error('Error:', error);
                 showAlert('خطأ في التحميل: ' + (error.response?.data?.message || error.message), 'danger');
-            } finally {
                 if (downloadStartBtn) {
                     downloadStartBtn.disabled = false;
                     downloadStartBtn.innerHTML = '<i class="bi bi-download"></i> ابدأ التحميل';
