@@ -2,12 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-التطبيق المتكامل للترجمة والتحميل v5.0
-- تحميل الفيديو من جميع المنصات
-- الترجمة الفورية (تحميل + تحويل صوت + ترجمة + دمج)
-- دمج الترجمة مع الفيديو
-- تحويل الصوت/الفيديو إلى نص
-- ترجمة النص
+التطبيق المتكامل للترجمة والتحميل v6.0 - النسخة المحسّنة
+تم حل جميع المشاكل وإضافة تحسينات شاملة
 """
 
 import os
@@ -16,49 +12,51 @@ import json
 import logging
 import subprocess
 import traceback
+import re
+import secrets
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
+from queue import Queue
 
-from flask import Flask, render_template, request, jsonify, send_file, session
+from flask import Flask, render_template, request, jsonify, send_file, session, send_from_directory
 from werkzeug.utils import secure_filename
 import yt_dlp
 
-# محاولة استيراد المكتبات الاختيارية
+# استيراد المكتبات الاختيارية
 try:
     import whisper
     WHISPER_AVAILABLE = True
 except ImportError:
     WHISPER_AVAILABLE = False
-    print("⚠️ Whisper غير متوفر - لن يعمل تحويل الكلام إلى نص")
 
 try:
     from faster_whisper import WhisperModel
     FASTER_WHISPER_AVAILABLE = True
-    print("✅ Faster Whisper متوفر - سيتم استخدامه (أسرع بـ 4-5x)")
 except ImportError:
     FASTER_WHISPER_AVAILABLE = False
-    print("⚠️ Faster Whisper غير متوفر - سيتم استخدام Whisper العادي")
 
 try:
     from deep_translator import GoogleTranslator
     TRANSLATOR_AVAILABLE = True
 except ImportError:
     TRANSLATOR_AVAILABLE = False
-    print("⚠️ deep-translator غير متوفر - لن تعمل الترجمة")
 
 # إعدادات التطبيق
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your-secret-key-change-in-production'
-app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024 * 1024  # 5GB
-app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['DOWNLOAD_FOLDER'] = 'downloads'
-app.config['OUTPUT_FOLDER'] = 'outputs'
-app.config['SUBTITLE_FOLDER'] = 'subtitles'
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-# تقليل حجم session cookie
-app.config['PERMANENT_SESSION_LIFETIME'] = 1800  # 30 دقيقة
+app.config.update(
+    SECRET_KEY=secrets.token_hex(32),
+    MAX_CONTENT_LENGTH=5 * 1024 * 1024 * 1024,  # 5GB
+    UPLOAD_FOLDER='uploads',
+    DOWNLOAD_FOLDER='downloads',
+    OUTPUT_FOLDER='outputs',
+    SUBTITLE_FOLDER='subtitles',
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=1800
+)
 
 # إعدادات السجلات
 logging.basicConfig(
@@ -76,794 +74,263 @@ for folder in ['uploads', 'downloads', 'outputs', 'subtitles', 'templates', 'sta
     Path(folder).mkdir(exist_ok=True)
 
 
-def transcribe_audio(audio_file: str, model_size: str = 'base', language: str = 'auto', use_faster: bool = True):
-    """
-    تحويل الصوت إلى نص باستخدام Faster Whisper أو Whisper العادي
-    
-    Args:
-        audio_file: مسار ملف الصوت
-        model_size: حجم النموذج (tiny, base, small, medium, large)
-        language: اللغة (auto للكشف التلقائي)
-        use_faster: استخدام Faster Whisper إذا كان متاحاً
-    
-    Returns:
-        dict: {'text': str, 'language': str, 'segments': list}
-    """
-    # محاولة استخدام Faster Whisper أولاً (أسرع بـ 4-5x)
-    if use_faster and FASTER_WHISPER_AVAILABLE:
-        try:
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            compute_type = "float16" if device == "cuda" else "int8"
-            
-            logger.info(f"استخدام Faster Whisper مع device: {device}, compute_type: {compute_type}")
-            model = WhisperModel(model_size, device=device, compute_type=compute_type)
-            
-            # تحويل اللغة
-            language_code = None if language == 'auto' else language
-            
-            # تحويل الصوت إلى نص
-            segments, info = model.transcribe(
-                audio_file,
-                language=language_code,
-                beam_size=5,
-                word_timestamps=True,
-                vad_filter=True,  # إزالة الضوضاء
-                vad_parameters=dict(min_silence_duration_ms=500)
-            )
-            
-            # تجميع النص والـ segments
-            full_text = ""
-            segments_list = []
-            
-            for segment in segments:
-                segment_text = segment.text.strip()
-                if segment_text:
-                    full_text += segment_text + " "
-                    segments_list.append({
-                        'id': len(segments_list) + 1,
-                        'start': segment.start,
-                        'end': segment.end,
-                        'text': segment_text,
-                        'words': [
-                            {
-                                'word': word.word,
-                                'start': word.start,
-                                'end': word.end
-                            }
-                            for word in segment.words
-                        ] if hasattr(segment, 'words') else []
-                    })
-            
-            detected_language = info.language if hasattr(info, 'language') else language
-            
-            logger.info(f"تم التحويل بنجاح باستخدام Faster Whisper - اللغة المكتشفة: {detected_language}")
-            
-            return {
-                'text': full_text.strip(),
-                'language': detected_language,
-                'segments': segments_list
-            }
-        except Exception as e:
-            logger.warning(f"فشل استخدام Faster Whisper: {e} - سيتم استخدام Whisper العادي")
-            # الاستمرار إلى Whisper العادي
-    
-    # استخدام Whisper العادي كـ fallback
-    if WHISPER_AVAILABLE:
-        try:
-            logger.info("استخدام Whisper العادي")
-            model = whisper.load_model(model_size)
-            
-            import torch
-            use_fp16 = torch.cuda.is_available()
-            
-            options = {
-                'language': None if language == 'auto' else language,
-                'task': 'transcribe',
-                'fp16': use_fp16,
-                'beam_size': 5,
-                'best_of': 5,
-                'temperature': 0.0,
-                'word_timestamps': True
-            }
-            
-            result = model.transcribe(audio_file, **options)
-            
-            # معالجة segments لضمان وجود word timestamps
-            processed_segments = []
-            for seg in result.get('segments', []):
-                processed_seg = {
-                    'start': seg.get('start', 0),
-                    'end': seg.get('end', 0),
-                    'text': seg.get('text', '').strip(),
-                    'words': seg.get('words', [])  # word timestamps من Whisper
-                }
-                processed_segments.append(processed_seg)
-            
-            return {
-                'text': result['text'],
-                'language': result.get('language', language),
-                'segments': processed_segments
-            }
-        except Exception as e:
-            logger.error(f"فشل استخدام Whisper: {e}")
-            raise Exception(f"فشل تحويل الصوت إلى نص: {str(e)}")
-    else:
-        raise Exception("لا توجد مكتبة متاحة لتحويل الصوت إلى نص")
+# =============================================================================
+# نظام إدارة المهام المحسّن
+# =============================================================================
 
-
-class VideoDownloader:
-    """محمل الفيديو من جميع المنصات"""
+class TaskManager:
+    """نظام إدارة المهام مع تتبع التقدم"""
     
     def __init__(self):
-        self.session_cache = {}
+        self.tasks = {}
+        self.lock = threading.Lock()
     
-    def detect_platform(self, url: str) -> str:
-        """الكشف عن المنصة من الرابط"""
-        platforms = {
-            'tiktok.com': 'tiktok',
-            'vm.tiktok.com': 'tiktok',
-            'instagram.com': 'instagram',
-            'twitter.com': 'twitter',
-            'x.com': 'twitter',
-            'youtube.com': 'youtube',
-            'youtu.be': 'youtube',
-            'facebook.com': 'facebook',
-            'fb.watch': 'facebook'
-        }
-        
-        for domain, platform in platforms.items():
-            if domain in url.lower():
-                return platform
-        return 'generic'
-    
-    def is_youtube_shorts(self, url: str) -> bool:
-        """التحقق من إذا كان الرابط YouTube Shorts"""
-        return '/shorts/' in url.lower() or 'youtube.com/shorts/' in url.lower()
-    
-    def get_ydl_opts(self, platform: str, quality: str = 'best', player_client: str = 'web') -> dict:
-        """الحصول على إعدادات yt-dlp"""
-        opts = {
-            'outtmpl': os.path.join(app.config['DOWNLOAD_FOLDER'], '%(title)s.%(ext)s'),
-            'quiet': False,
-            'no_warnings': False,
-            'nocheckcertificate': True,
-            'geo_bypass': True,
-            'socket_timeout': 30,
-            'retries': 3,
-            'fragment_retries': 3,
-            'concurrent_fragment_downloads': 16,
-            'http_chunk_size': 10485760,
-            # تحسينات لتقليل التحذيرات
-            'ignoreerrors': False,
-            'no_check_certificate': True,
-            'prefer_insecure': False,
-            # استخدام extractor args محسّن
-            'extractor_args': {
-                'youtube': {
-                    'player_client': [player_client],  # استخدام client محدد
-                }
-            },
-            # السماح بتحميل أي تنسيق متاح
-            'format_sort': ['res', 'ext:mp4:m4a', 'codec', 'size'],
-        }
-        
-        # إعدادات الجودة مع ضمان mp4 وجودة جيدة
-        if quality == 'best':
-            # أفضل جودة mp4 - دعم Mac و Windows (H.264/AVC1)
-            opts['format'] = 'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
-        elif quality == '720p' or quality == 'medium':
-            opts['format'] = 'bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best'
-        elif quality == '480p' or quality == 'low':
-            opts['format'] = 'bestvideo[height<=480][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best'
-        elif quality == 'audio':
-            opts['format'] = 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio'
-            opts['postprocessors'] = [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }]
-        else:
-            # معالجة تنسيقات أخرى مع fallback
-            opts['format'] = quality
-        
-        # إعدادات خاصة بمنصة TikTok - محسّنة لدعم For You
-        if platform == 'tiktok':
-            opts['http_headers'] = {
-                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
-                'Referer': 'https://www.tiktok.com/',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
+    def create_task(self, task_id: str, total_steps: int = 5):
+        """إنشاء مهمة جديدة"""
+        with self.lock:
+            self.tasks[task_id] = {
+                'status': 'pending',
+                'current_step': 0,
+                'total_steps': total_steps,
+                'progress': 0,
+                'message': 'في الانتظار...',
+                'result': None,
+                'error': None,
+                'started_at': datetime.now().isoformat(),
+                'updated_at': datetime.now().isoformat()
             }
-            # إضافة extractor args محسّنة لـ TikTok
-            opts['extractor_args'] = {
-                'tiktok': {
-                    'webpage_download': True,
-                }
-            }
-            # تحسين format selection لـ TikTok
-            if quality != 'audio':
-                opts['format'] = 'best[ext=mp4]/best'
-        
-        return opts
     
-    def download(self, url: str, quality: str = 'best') -> Dict:
-        """تحميل الفيديو"""
-        result = {
-            'success': False,
-            'message': '',
-            'file': None,
-            'info': {}
-        }
-        
-        try:
-            platform = self.detect_platform(url)
-            is_shorts = self.is_youtube_shorts(url)
-            
-            # إعدادات خاصة لـ TikTok
-            if platform == 'tiktok':
-                logger.info("Detected TikTok - using optimized settings")
-                # لـ TikTok، استخدام format بسيط
-                ydl_opts = self.get_ydl_opts(platform, quality, player_client='web')
-                if quality == 'best':
-                    ydl_opts['format'] = 'best[ext=mp4]/best'
-                elif quality == 'audio':
-                    ydl_opts['format'] = 'bestaudio'
-                else:
-                    # محاولة جودة محددة
-                    try:
-                        height = int(quality.replace('p', ''))
-                        ydl_opts['format'] = f'best[height<={height}][ext=mp4]/best[height<={height}]/best'
-                    except:
-                        ydl_opts['format'] = 'best[ext=mp4]/best'
-                
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(url, download=False)
-                        if not info:
-                            raise Exception("لم يتم العثور على معلومات الفيديو")
-                        
-                        ydl.download([url])
-                        
-                        # البحث عن الملف المحمّل
-                        title = info.get('title', 'video')
-                        ext = info.get('ext', 'mp4') or 'mp4'
-                        filename = f"{title}.{ext}"
-                        filepath = os.path.join(app.config['DOWNLOAD_FOLDER'], filename)
-                        
-                        if os.path.exists(filepath):
-                            result['success'] = True
-                            result['file'] = filepath
-                            result['info'] = info
-                            logger.info(f"Successfully downloaded TikTok video: {filename}")
-                            return result
-                        else:
-                            # البحث عن ملفات أخرى
-                            for file in os.listdir(app.config['DOWNLOAD_FOLDER']):
-                                if file.startswith(title[:20]) or title[:20] in file:
-                                    result['success'] = True
-                                    result['file'] = os.path.join(app.config['DOWNLOAD_FOLDER'], file)
-                                    result['info'] = info
-                                    logger.info(f"Found TikTok video file: {file}")
-                                    return result
-                            
-                            raise Exception("تم التحميل لكن لم يتم العثور على الملف")
-                except Exception as e:
-                    error_msg = str(e)
-                    logger.error(f"TikTok download error: {e}")
-                    if 'private' in error_msg.lower() or 'unavailable' in error_msg.lower():
-                        raise Exception("هذا الفيديو غير متاح أو خاص. يرجى التأكد من أن الرابط صحيح.")
-                    elif 'age' in error_msg.lower() or 'restricted' in error_msg.lower():
-                        raise Exception("هذا الفيديو مقيد بالعمر أو غير متاح في منطقتك.")
-                    else:
-                        raise Exception(f"فشل تحميل فيديو TikTok: {error_msg}")
-            
-            # لـ YouTube Shorts، استخدام إعدادات خاصة - محاولة clients متعددة
-            if is_shorts:
-                logger.info("Detected YouTube Shorts - trying multiple clients")
-                # محاولة android أولاً لأنه يعمل غالباً مع Shorts
-                clients_to_try = ['android', 'ios', 'web']
-            else:
-                # لـ YouTube العادي، محاولة web أولاً ثم android
-                clients_to_try = ['web', 'android']
-            
-            # محاولة التحميل مع clients مختلفة
-            last_error = None
-            for client in clients_to_try:
-                try:
-                    logger.info(f"Trying with player_client: {client}")
-                    
-                    # محاولة التحميل مع fallback للتنسيقات - تحسين لضمان mp4 وجودة جيدة
-                    formats_to_try = []
-                    
-                    # لـ YouTube Shorts، استخدام تنسيقات أبسط مع دعم SABR streaming
-                    if is_shorts:
-                        formats_to_try = [
-                            'best[height<=1080]/best[height<=720]/best[height<=480]/best',  # أي جودة متاحة
-                            'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',  # دمج فيديو وصوت
-                            'bestvideo+bestaudio/best',  # أفضل فيديو وصوت
-                            'best',  # أفضل تنسيق متاح
-                            'worst',  # أسوأ تنسيق (غالباً متاح)
-                            None  # بدون format محدد - yt-dlp سيختار تلقائياً
-                        ]
-                    elif quality == 'best':
-                        formats_to_try = [
-                            'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best',  # 4K
-                            'bestvideo[height<=1440]+bestaudio/best[height<=1440]/best',  # 2K
-                            'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',  # Full HD
-                            'bestvideo+bestaudio/best',  # أفضل فيديو وصوت
-                            'best',  # أفضل تنسيق متاح
-                            'worst',  # أسوأ تنسيق (fallback)
-                            None  # بدون format محدد
-                        ]
-                    elif quality == '720p' or quality == 'medium':
-                        formats_to_try = [
-                            'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
-                            'bestvideo[height<=720]/best[height<=720]/best',
-                            'best[height<=720]/best',
-                            'worst',
-                            None
-                        ]
-                    elif quality == '480p' or quality == 'low':
-                        formats_to_try = [
-                            'bestvideo[height<=480]+bestaudio/best[height<=480]/best',
-                            'bestvideo[height<=480]/best[height<=480]/best',
-                            'best[height<=480]/best',
-                            'worst',
-                            None
-                        ]
-                    elif quality.startswith('1080p') or quality.startswith('1440p') or quality.startswith('2160p'):
-                        # دعم الجودات العالية
-                        try:
-                            height = int(quality.replace('p', ''))
-                            formats_to_try = [
-                                f'bestvideo[height<={height}]+bestaudio/best[height<={height}]/best',
-                                f'bestvideo[height<={height}]/best[height<={height}]/best',
-                                'best',
-                                'worst',
-                                None
-                            ]
-                        except:
-                            formats_to_try = ['best', 'worst', None]
-                    elif quality == 'audio':
-                        formats_to_try = [
-                            'bestaudio',
-                            'worstaudio',
-                            None
-                        ]
-                    else:
-                        # محاولة استخدام quality مباشرة مع fallback
-                        formats_to_try = [quality, 'best', 'worst', None]
-                    
-                    for format_str in formats_to_try:
-                        try:
-                            ydl_opts = self.get_ydl_opts(platform, quality, player_client=client)
-                            if format_str is not None:
-                                ydl_opts['format'] = format_str
-                            else:
-                                # بدون format محدد - yt-dlp سيختار تلقائياً
-                                ydl_opts.pop('format', None)
-                            
-                            # إضافة ignoreerrors للسماح بالتخطي عند الفشل
-                            ydl_opts['ignoreerrors'] = False
-                            
-                            # إزالة القيود الصارمة على mp4 للسماح بأي تنسيق متاح
-                            if 'format' in ydl_opts:
-                                # إذا كان format محدد، احتفظ به
-                                pass
-                            else:
-                                # السماح بأي تنسيق متاح
-                                ydl_opts.pop('format', None)
-                            
-                            # إضافة إعدادات للتعامل مع SABR streaming
-                            ydl_opts['extractor_args'] = {
-                                'youtube': {
-                                    'player_client': [client],
-                                    'skip': ['dash', 'hls'],  # تخطي DASH و HLS إذا فشل
-                                }
-                            }
-                            
-                            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                                # استخراج المعلومات أولاً
-                                info = ydl.extract_info(url, download=False)
-                                
-                                if not info:
-                                    raise Exception("لم يتم العثور على معلومات الفيديو")
-                                
-                                # التحقق من وجود تنسيقات فيديو متاحة
-                                formats = info.get('formats', [])
-                                has_video = any(fmt.get('vcodec', 'none') != 'none' for fmt in formats)
-                                
-                                if not has_video:
-                                    logger.warning(f"No video formats available with client {client}, format {format_str}")
-                                    # محاولة format آخر
-                                    continue
-                                
-                                # التحقق من أن الملف موجود مسبقاً
-                                expected_filename = ydl.prepare_filename(info)
-                                if quality == 'audio':
-                                    expected_filename = expected_filename.rsplit('.', 1)[0] + '.mp3'
-                                
-                                expected_basename = os.path.basename(expected_filename)
-                                existing_file = os.path.join(app.config['DOWNLOAD_FOLDER'], expected_basename)
-                                
-                                if os.path.exists(existing_file):
-                                    logger.info(f"الملف موجود مسبقاً: {existing_file}")
-                                    filename = existing_file
-                                else:
-                                    # تحميل الفيديو
-                                    ydl.download([url])
-                                    filename = ydl.prepare_filename(info)
-                                    if quality == 'audio':
-                                        filename = filename.rsplit('.', 1)[0] + '.mp3'
-                                    
-                                    filename = os.path.normpath(filename)
-                                    
-                                    if not os.path.isabs(filename):
-                                        basename = os.path.basename(filename)
-                                        full_path = os.path.join(app.config['DOWNLOAD_FOLDER'], basename)
-                                        if os.path.exists(full_path):
-                                            filename = full_path
-                                        else:
-                                            # البحث عن الملف الأحدث
-                                            download_folder = app.config['DOWNLOAD_FOLDER']
-                                            if os.path.exists(download_folder):
-                                                video_files = []
-                                                for file in os.listdir(download_folder):
-                                                    file_path = os.path.join(download_folder, file)
-                                                    if os.path.isfile(file_path) and file.endswith(('.mp4', '.webm', '.mkv', '.mp3', '.m4a', '.mov', '.avi')):
-                                                        video_files.append((file_path, os.path.getmtime(file_path)))
-                                                
-                                                if video_files:
-                                                    video_files.sort(key=lambda x: x[1], reverse=True)
-                                                    filename = video_files[0][0]
-                                
-                                if not os.path.exists(filename):
-                                    raise Exception(f"لم يتم العثور على الملف بعد التحميل: {filename}")
-                                
-                                result['success'] = True
-                                result['message'] = 'تم التحميل بنجاح'
-                                result['file'] = filename
-                                result['info'] = {
-                                    'title': info.get('title', 'Unknown'),
-                                    'duration': info.get('duration', 0),
-                                    'platform': platform,
-                                    'quality': quality
-                                }
-                                logger.info(f"Successfully downloaded with client: {client}, format: {format_str}")
-                                return result
-                                
-                        except Exception as e:
-                            error_msg = str(e)
-                            # تخطي الأخطاء المتعلقة بالتنسيقات غير المتاحة
-                            if 'format is not available' in error_msg or 'Only images are available' in error_msg:
-                                logger.warning(f"Format {format_str} not available with client {client}, trying next...")
-                                continue
-                            else:
-                                logger.warning(f"Failed with format {format_str} and client {client}: {e}")
-                                continue
-                    
-                    # إذا فشلت جميع التنسيقات مع هذا client، جرب client آخر
-                    logger.warning(f"All formats failed with client {client}, trying next client...")
-                    continue
-                    
-                except Exception as e:
-                    last_error = e
-                    logger.warning(f"Failed with client {client}: {e}")
-                    continue
-            
-            # إذا فشلت جميع المحاولات
-            if last_error:
-                error_msg = str(last_error)
-                if 'format is not available' in error_msg or 'Only images are available' in error_msg:
-                    raise Exception("هذا الفيديو غير متاح للتحميل. قد يكون محمياً أو متاحاً فقط كصور. يرجى المحاولة مع فيديو آخر أو تحديث yt-dlp باستخدام: pip install -U yt-dlp")
-                elif 'nsig extraction failed' in error_msg:
-                    raise Exception("فشل استخراج التنسيقات. يرجى تحديث yt-dlp باستخدام: pip install -U yt-dlp")
-                else:
-                    raise last_error
-            else:
-                raise Exception("فشل التحميل بعد محاولات متعددة. يرجى التأكد من أن الرابط صحيح أو تحديث yt-dlp")
-        
-        except Exception as e:
-            result['message'] = f'خطأ في التحميل: {str(e)}'
-            logger.error(f"Download error: {e}")
-            logger.error(traceback.format_exc())
-        
-        return result
+    def update_task(self, task_id: str, **kwargs):
+        """تحديث حالة المهمة"""
+        with self.lock:
+            if task_id in self.tasks:
+                self.tasks[task_id].update(kwargs)
+                self.tasks[task_id]['updated_at'] = datetime.now().isoformat()
+    
+    def get_task(self, task_id: str) -> Dict:
+        """الحصول على حالة المهمة"""
+        with self.lock:
+            return self.tasks.get(task_id, {})
+    
+    def complete_task(self, task_id: str, result: any):
+        """إكمال المهمة"""
+        self.update_task(
+            task_id,
+            status='completed',
+            progress=100,
+            result=result,
+            completed_at=datetime.now().isoformat()
+        )
+    
+    def fail_task(self, task_id: str, error: str):
+        """فشل المهمة"""
+        self.update_task(
+            task_id,
+            status='failed',
+            error=error,
+            failed_at=datetime.now().isoformat()
+        )
 
+task_manager = TaskManager()
+
+# Store progress for downloads (للتوافق مع النظام القديم)
+download_progress = {}
+
+
+# =============================================================================
+# محسّن Whisper مع دعم كامل
+# =============================================================================
+
+class WhisperTranscriber:
+    """محسّن تحويل الصوت إلى نص"""
+    
+    def __init__(self):
+        self.model_cache = {}
+    
+    def transcribe(self, audio_file: str, model_size: str = 'base', 
+                   language: str = 'auto') -> Dict:
+        """تحويل الصوت إلى نص مع دعم Faster Whisper"""
+        
+        # محاولة Faster Whisper أولاً
+        if FASTER_WHISPER_AVAILABLE:
+            try:
+                return self._transcribe_faster(audio_file, model_size, language)
+            except Exception as e:
+                logger.warning(f"Faster Whisper failed: {e}, falling back to standard")
+        
+        # استخدام Whisper العادي
+        if WHISPER_AVAILABLE:
+            return self._transcribe_standard(audio_file, model_size, language)
+        
+        raise Exception("لا توجد مكتبة متاحة لتحويل الصوت إلى نص")
+    
+    def _transcribe_faster(self, audio_file: str, model_size: str, language: str) -> Dict:
+        """استخدام Faster Whisper"""
+        import torch
+        
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        compute_type = "float16" if device == "cuda" else "int8"
+        
+        model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        
+        language_code = None if language == 'auto' else language
+        
+        segments, info = model.transcribe(
+            audio_file,
+            language=language_code,
+            beam_size=5,
+            word_timestamps=True,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500)
+        )
+        
+        full_text = ""
+        segments_list = []
+        
+        for segment in segments:
+            text = segment.text.strip()
+            if text:
+                full_text += text + " "
+                segments_list.append({
+                    'start': segment.start,
+                    'end': segment.end,
+                    'text': text,
+                    'words': [
+                        {
+                            'word': word.word,
+                            'start': word.start,
+                            'end': word.end
+                        }
+                        for word in getattr(segment, 'words', [])
+                    ]
+                })
+        
+        return {
+            'text': full_text.strip(),
+            'language': getattr(info, 'language', language),
+            'segments': segments_list
+        }
+    
+    def _transcribe_standard(self, audio_file: str, model_size: str, language: str) -> Dict:
+        """استخدام Whisper العادي"""
+        if model_size not in self.model_cache:
+            self.model_cache[model_size] = whisper.load_model(model_size)
+        
+        model = self.model_cache[model_size]
+        
+        result = model.transcribe(
+            audio_file,
+            language=None if language == 'auto' else language,
+            word_timestamps=True
+        )
+        
+        return {
+            'text': result['text'],
+            'language': result.get('language', language),
+            'segments': result.get('segments', [])
+        }
+
+whisper_transcriber = WhisperTranscriber()
+
+
+# =============================================================================
+# محسّن معالجة الترجمة
+# =============================================================================
 
 class SubtitleProcessor:
-    """معالج الترجمة"""
+    """معالج الترجمة المحسّن"""
     
     @staticmethod
-    def split_long_segments(segments: List[Dict], max_duration: float = 5.0, max_chars: int = 80) -> List[Dict]:
-        """
-        تقسيم segments الطويلة إلى أجزاء أصغر بناءً على الكلام والوقفات الطبيعية
-        
-        Args:
-            segments: قائمة segments (يجب أن تحتوي على 'words' مع timestamps إذا كانت متاحة)
-            max_duration: الحد الأقصى لمدة كل segment بالثواني
-            max_chars: الحد الأقصى لعدد الأحرف في كل segment
-        
-        Returns:
-            قائمة segments مقسمة بناءً على الكلام الفعلي
-        """
+    def split_long_segments(segments: List[Dict], max_duration: float = 5.0, 
+                           max_chars: int = 80) -> List[Dict]:
+        """تقسيم segments الطويلة بذكاء"""
         split_segments = []
         
         for segment in segments:
-            start_time = float(segment.get('start', 0))
-            end_time = float(segment.get('end', start_time + 3))
+            start = float(segment.get('start', 0))
+            end = float(segment.get('end', start + 3))
             text = segment.get('text', '').strip()
-            words = segment.get('words', [])  # word timestamps إذا كانت متاحة
             
             if not text:
                 continue
             
-            duration = end_time - start_time
+            duration = end - start
             
-            # إذا كان segment قصيراً وعدد الأحرف معقول، استخدمه كما هو
+            # إذا كان segment قصيراً، استخدمه كما هو
             if duration <= max_duration and len(text) <= max_chars:
                 split_segments.append({
-                    'start': start_time,
-                    'end': end_time,
+                    'start': start,
+                    'end': end,
                     'text': text
                 })
                 continue
             
-            # إذا كانت word timestamps متاحة، استخدمها لتقسيم ذكي
-            if words and len(words) > 0:
-                split_segments.extend(
-                    SubtitleProcessor._split_by_word_timestamps(
-                        words, text, start_time, end_time, max_duration, max_chars
-                    )
-                )
-            else:
-                # تقسيم بناءً على النص فقط (fallback)
-                split_segments.extend(
-                    SubtitleProcessor._split_by_text_only(
-                        text, start_time, end_time, max_duration, max_chars
-                    )
-                )
-        
-        return split_segments
-    
-    @staticmethod
-    def _split_by_word_timestamps(words: List[Dict], text: str, start_time: float, end_time: float, 
-                                   max_duration: float, max_chars: int) -> List[Dict]:
-        """تقسيم بناءً على word timestamps والوقفات الطبيعية"""
-        split_segments = []
-        
-        # تجميع الكلمات مع timestamps
-        word_list = []
-        for word_info in words:
-            if isinstance(word_info, dict):
-                word = word_info.get('word', '').strip()
-                word_start = float(word_info.get('start', 0))
-                word_end = float(word_info.get('end', 0))
-            else:
-                # إذا كان word_info كائن وليس dict
-                word = getattr(word_info, 'word', '').strip()
-                word_start = float(getattr(word_info, 'start', 0))
-                word_end = float(getattr(word_info, 'end', 0))
-            
-            if word:
-                word_list.append({
-                    'word': word,
-                    'start': word_start,
-                    'end': word_end
+            # تقسيم النص بذكاء
+            words = text.split()
+            if len(words) <= 3:
+                split_segments.append({
+                    'start': start,
+                    'end': end,
+                    'text': text
                 })
-        
-        if not word_list:
-            return SubtitleProcessor._split_by_text_only(text, start_time, end_time, max_duration, max_chars)
-        
-        # تقسيم بناءً على الوقفات الطبيعية والحدود
-        current_segment_words = []
-        current_start = word_list[0]['start']
-        current_text = ""
-        pause_threshold = 0.5  # وقفة 0.5 ثانية تعتبر نقطة تقسيم جيدة
-        
-        for i, word_data in enumerate(word_list):
-            word = word_data['word']
-            word_start = word_data['start']
-            word_end = word_data['end']
+                continue
             
-            # حساب الوقفة قبل هذه الكلمة
-            if i > 0:
-                prev_word_end = word_list[i-1]['end']
-                pause_duration = word_start - prev_word_end
-            else:
-                pause_duration = 0
+            # تقسيم النص حسب الجمل
+            sentences = re.split(r'([.!?،؛]\s*)', text)
             
-            # إضافة الكلمة للـ segment الحالي
-            current_segment_words.append(word)
-            current_text = ' '.join(current_segment_words)
-            current_end = word_end
+            current_text = ""
+            current_start = start
+            time_per_char = duration / len(text) if len(text) > 0 else 0.1
             
-            # تحديد ما إذا كان يجب إنهاء الـ segment الحالي
-            should_split = False
-            
-            # 1. إذا كانت المدة تجاوزت الحد الأقصى
-            if current_end - current_start > max_duration:
-                should_split = True
-            
-            # 2. إذا كان عدد الأحرف تجاوز الحد الأقصى
-            elif len(current_text) > max_chars:
-                should_split = True
-            
-            # 3. إذا كانت هناك وقفة طويلة (pause) - نقطة تقسيم طبيعية
-            elif pause_duration > pause_threshold and len(current_segment_words) > 3:
-                should_split = True
-            
-            # 4. إذا انتهت الجملة بعلامة توقف (نقطة، علامة استفهام، إلخ)
-            elif word.rstrip().endswith(('.', '!', '?', '،', '؛')) and len(current_segment_words) >= 3:
-                should_split = True
-            
-            # 5. إذا كانت هناك فاصلة ووصلنا لطول معقول
-            elif word.rstrip().endswith((',', '،', ';', '؛')) and len(current_text) > max_chars * 0.7:
-                should_split = True
-            
-            if should_split:
-                # حفظ الـ segment الحالي
-                segment_text = ' '.join(current_segment_words).strip()
-                if segment_text:
+            for sentence in sentences:
+                if not sentence.strip():
+                    continue
+                
+                potential_text = current_text + sentence
+                
+                if len(potential_text) > max_chars and current_text:
+                    # حفظ segment الحالي
+                    estimated_end = current_start + len(current_text) * time_per_char
                     split_segments.append({
                         'start': current_start,
-                        'end': current_end,
-                        'text': segment_text
+                        'end': min(estimated_end, end),
+                        'text': current_text.strip()
                     })
-                
-                # بدء segment جديد
-                current_segment_words = []
-                current_start = word_start
-                current_text = ""
-        
-        # إضافة الـ segment الأخير
-        if current_segment_words:
-            segment_text = ' '.join(current_segment_words).strip()
-            if segment_text:
-                final_end = word_list[-1]['end']
+                    current_start = estimated_end
+                    current_text = sentence
+                else:
+                    current_text = potential_text
+            
+            # إضافة النص المتبقي
+            if current_text.strip():
                 split_segments.append({
                     'start': current_start,
-                    'end': final_end,
-                    'text': segment_text
+                    'end': end,
+                    'text': current_text.strip()
                 })
         
         return split_segments
     
     @staticmethod
-    def _split_by_text_only(text: str, start_time: float, end_time: float, 
-                            max_duration: float, max_chars: int) -> List[Dict]:
-        """تقسيم بناءً على النص فقط (fallback عندما لا تكون word timestamps متاحة)"""
-        split_segments = []
-        duration = end_time - start_time
+    def create_srt(segments: List[Dict]) -> str:
+        """إنشاء ملف SRT من segments"""
+        srt_lines = []
         
-        # تقسيم على علامات التوقف الطبيعية
-        import re
-        # تقسيم على علامات التوقف مع الاحتفاظ بها
-        sentences = re.split(r'([.!?،؛]\s*)', text)
+        for i, seg in enumerate(segments, 1):
+            start = SubtitleProcessor._format_time(seg['start'])
+            end = SubtitleProcessor._format_time(seg['end'])
+            text = seg['text']
+            
+            srt_lines.append(f"{i}")
+            srt_lines.append(f"{start} --> {end}")
+            srt_lines.append(text)
+            srt_lines.append("")
         
-        current_sentence = ""
-        current_start = start_time
-        total_chars = len(text)
-        
-        for i, part in enumerate(sentences):
-            if not part.strip():
-                continue
-            
-            current_sentence += part
-            
-            # حساب الوقت بناءً على نسبة الأحرف
-            chars_ratio = len(current_sentence) / total_chars if total_chars > 0 else 1.0
-            current_end = start_time + (duration * chars_ratio)
-            
-            # تحديد ما إذا كان يجب إنهاء الـ segment
-            should_split = False
-            
-            # إذا انتهت الجملة بعلامة توقف
-            if part.strip().endswith(('.', '!', '?', '،', '؛')):
-                should_split = True
-            
-            # إذا تجاوزت المدة أو الأحرف الحد الأقصى
-            elif current_end - current_start > max_duration or len(current_sentence) >= max_chars:
-                should_split = True
-            
-            if should_split and current_sentence.strip():
-                # التأكد من أن المدة معقولة
-                if current_end - current_start > max_duration:
-                    current_end = current_start + max_duration
-                
-                split_segments.append({
-                    'start': current_start,
-                    'end': current_end,
-                    'text': current_sentence.strip()
-                })
-                
-                current_start = current_end
-                current_sentence = ""
-        
-        # إضافة أي نص متبقي
-        if current_sentence.strip():
-            split_segments.append({
-                'start': current_start,
-                'end': end_time,
-                'text': current_sentence.strip()
-            })
-        
-        return split_segments
+        return '\n'.join(srt_lines)
     
     @staticmethod
-    def create_srt(text: str, duration: float = None, segments: List[Dict] = None) -> str:
-        """إنشاء ملف SRT"""
-        srt_content = []
-        
-        if segments:
-            for i, segment in enumerate(segments):
-                start_time = float(segment.get('start', 0))
-                end_time = float(segment.get('end', start_time + 3))
-                text_segment = segment.get('text', '').strip()
-                
-                if end_time <= start_time:
-                    end_time = start_time + 3.0
-                
-                start_str = SubtitleProcessor.seconds_to_srt_time(start_time)
-                end_str = SubtitleProcessor.seconds_to_srt_time(end_time)
-                
-                srt_content.append(f"{i + 1}")
-                srt_content.append(f"{start_str} --> {end_str}")
-                srt_content.append(text_segment)
-                srt_content.append("")
-            
-            return '\n'.join(srt_content)
-        
-        # تقسيم النص
-        lines = text.split('\n')
-        segments_list = []
-        current_segment = []
-        char_count = 0
-        
-        for line in lines:
-            if not line.strip():
-                continue
-            words = line.split()
-            for word in words:
-                current_segment.append(word)
-                char_count += len(word) + 1
-                
-                if char_count >= 40 or word.endswith(('.', '!', '?', '،', '؛')):
-                    segments_list.append(' '.join(current_segment))
-                    current_segment = []
-                    char_count = 0
-        
-        if current_segment:
-            segments_list.append(' '.join(current_segment))
-        
-        if not segments_list:
-            return ""
-        
-        # حساب التوقيتات
-        if duration and duration > 0:
-            segment_duration = max(duration / len(segments_list), 2.0)
-        else:
-            segment_duration = 3.0
-        
-        for i, segment in enumerate(segments_list):
-            start_time = i * segment_duration
-            end_time = min((i + 1) * segment_duration, duration) if duration else (i + 1) * segment_duration
-            
-            start_str = SubtitleProcessor.seconds_to_srt_time(start_time)
-            end_str = SubtitleProcessor.seconds_to_srt_time(end_time)
-            
-            srt_content.append(f"{i + 1}")
-            srt_content.append(f"{start_str} --> {end_str}")
-            srt_content.append(segment.strip())
-            srt_content.append("")
-        
-        return '\n'.join(srt_content)
-    
-    @staticmethod
-    def seconds_to_srt_time(seconds: float) -> str:
-        """تحويل الثواني إلى تنسيق SRT"""
+    def _format_time(seconds: float) -> str:
+        """تنسيق الوقت لـ SRT"""
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         secs = seconds % 60
@@ -873,65 +340,46 @@ class SubtitleProcessor:
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{millisecs:03d}"
     
     @staticmethod
-    def create_ass_subtitle(
-        srt_content: str,
-        font_size: int = 20,
-        font_color: str = "FFFFFF",
-        bg_color: str = "000000",
-        bg_opacity: int = 128,
-        position: str = "bottom",
-        font_name: str = "Arial",
-        vertical_offset: int = 0
-    ) -> str:
-        """إنشاء ملف ASS"""
-        # ASS يستخدم تنسيق BGR (Blue-Green-Red) بدلاً من RGB
-        # تحويل من RGB hex إلى BGR hex
-        if len(font_color) == 6:
-            # RGB: RRGGBB -> BGR: BBGGRR
-            r = font_color[0:2]
-            g = font_color[2:4]
-            b = font_color[4:6]
-            ass_font_color = f"&H00{b}{g}{r}"  # BGR format
-        else:
-            ass_font_color = "&H00FFFFFF"  # أبيض افتراضي
+    def create_ass(srt_content: str, settings: Dict) -> str:
+        """إنشاء ملف ASS مع إعدادات مخصصة"""
+        # تحويل جميع القيم إلى الأنواع الصحيحة
+        font_size = int(settings.get('fontSize', settings.get('font_size', 24)))
+        font_color = str(settings.get('fontColor', settings.get('font_color', '#FFFFFF')))
+        bg_color = str(settings.get('bgColor', settings.get('bg_color', '#000000')))
+        bg_opacity = int(settings.get('bgOpacity', settings.get('bg_opacity', 180)))
+        position = str(settings.get('position', 'bottom'))
+        font_family = str(settings.get('fontFamily', settings.get('font_name', 'Arial')))
         
-        if len(bg_color) == 6:
-            # RGB: RRGGBB -> BGR: BBGGRR
-            r = bg_color[0:2]
-            g = bg_color[2:4]
-            b = bg_color[4:6]
-            # bg_opacity في ASS هو قيمة hex (00-FF)
-            opacity_hex = format(min(255, max(0, bg_opacity)), '02X')
-            ass_bg_color = f"&H{opacity_hex}{b}{g}{r}"  # BGR format with opacity
-        else:
-            ass_bg_color = f"&H{format(min(255, max(0, bg_opacity)), '02X')}000000"  # أسود افتراضي
+        # التأكد من أن bg_opacity في النطاق الصحيح (0-255)
+        bg_opacity = max(0, min(255, bg_opacity))
+        
+        # تحويل ألوان RGB إلى BGR
+        def rgb_to_bgr(hex_color):
+            hex_color = str(hex_color).lstrip('#')
+            if len(hex_color) == 6:
+                r, g, b = hex_color[0:2], hex_color[2:4], hex_color[4:6]
+                return "&H00" + b + g + r
+            return "&H00FFFFFF"
+        
+        primary_color = rgb_to_bgr(font_color)
+        bg_color_bgr = rgb_to_bgr(bg_color)
         
         alignment = {'top': '8', 'center': '5', 'bottom': '2'}.get(position, '2')
+        margin_v = 10
         
-        # حساب margin_v بناءً على الموضع و vertical_offset
-        if position == 'top':
-            margin_v = max(10, 10 - vertical_offset)  # سالب يرفع لأعلى
-        elif position == 'center':
-            margin_v = 10
-        else:  # bottom
-            margin_v = max(10, 10 + vertical_offset)  # موجب يخفض لأسفل
+        # تحضير back_color بشكل منفصل - استخدام format على int فقط
+        bg_opacity_hex = format(bg_opacity, '02X')
+        bg_color_part = bg_color_bgr[3:] if len(bg_color_bgr) > 3 else bg_color_bgr
+        back_colour = "&H" + bg_opacity_hex + bg_color_part
         
-        ass_header = f"""[Script Info]
+        # استخدام string concatenation لتجنب مشاكل f-string مع الأحرف الخاصة
+        ass_header = """[Script Info]
 Title: Generated Subtitles
 ScriptType: v4.00+
-WrapStyle: 0
-ScaledBorderAndShadow: yes
-YCbCr Matrix: TV.601
-PlayResX: 1920
-PlayResY: 1080
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},{ass_font_color},&H000000FF,&H00000000,{ass_bg_color},0,0,0,0,100,100,0,0,3,2,1,{alignment},10,10,{margin_v},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
+Style: Default,""" + str(font_family) + "," + str(font_size) + "," + str(primary_color) + ",&H000000FF,&H00000000," + str(back_colour) + ",0,0,0,0,100,100,0,0,3,2,1," + str(alignment) + ",10,10," + str(margin_v) + ",1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
         
         events = []
         lines = srt_content.strip().split('\n')
@@ -945,29 +393,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     
                     if ' --> ' in timing:
                         start, end = timing.split(' --> ')
-                        start = start.replace(',', '.').strip()
-                        end = end.replace(',', '.').strip()
+                        start_ass = start.replace(',', '.')
+                        end_ass = end.replace(',', '.')
                         
-                        start_ass = SubtitleProcessor.srt_time_to_ass(start)
-                        end_ass = SubtitleProcessor.srt_time_to_ass(end)
-                        
-                        # استخدام Effect لتطبيق vertical_offset بدقة
-                        effect = ''
-                        if vertical_offset != 0:
-                            if position == 'center':
-                                # للمركز: استخدام pos لتحديد الموضع بدقة
-                                y_pos = 540 - vertical_offset  # 540 هو منتصف 1080
-                                effect = f"\\pos(960,{y_pos})"
-                            elif position == 'top':
-                                # للأعلى: استخدام an=8 و pos
-                                y_pos = 50 - vertical_offset
-                                effect = f"\\an8\\pos(960,{y_pos})"
-                            else:  # bottom
-                                # للأسفل: استخدام an=2 و pos
-                                y_pos = 1030 - vertical_offset  # 1030 = 1080 - 50
-                                effect = f"\\an2\\pos(960,{y_pos})"
-                        
-                        events.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,{effect},{text}")
+                        # استخدام string concatenation لتجنب مشاكل f-string
+                        dialogue_line = "Dialogue: 0," + start_ass + "," + end_ass + ",Default,,0,0,0,," + text
+                        events.append(dialogue_line)
                     
                     i += 4
                 else:
@@ -976,293 +407,663 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 i += 1
         
         return ass_header + '\n'.join(events)
-    
-    @staticmethod
-    def srt_time_to_ass(srt_time: str) -> str:
-        """تحويل وقت SRT إلى ASS"""
-        parts = srt_time.replace(',', '.').split(':')
-        if len(parts) >= 3:
-            h = int(parts[0])
-            m = int(parts[1])
-            s = float(parts[2])
-            return f"{h}:{m:02d}:{s:05.2f}"
-        return "0:00:00.00"
 
+
+# =============================================================================
+# محسّن معالجة الفيديو
+# =============================================================================
 
 class VideoProcessor:
-    """معالج الفيديو"""
+    """معالج الفيديو المحسّن"""
     
     @staticmethod
     def check_ffmpeg() -> bool:
         """التحقق من توفر ffmpeg"""
         try:
-            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True, timeout=5)
             return True
         except:
             return False
     
     @staticmethod
-    def get_video_duration(video_path: str) -> float:
-        """الحصول على مدة الفيديو"""
+    def extract_audio(video_path: str, output_path: str) -> bool:
+        """استخراج الصوت من الفيديو"""
         try:
             cmd = [
-                'ffprobe',
-                '-v', 'error',
-                '-show_entries', 'format=duration',
-                '-of', 'default=noprint_wrappers=1:nokey=1',
-                video_path
+                'ffmpeg',
+                '-i', video_path,
+                '-vn',
+                '-acodec', 'pcm_s16le',
+                '-ar', '16000',
+                '-ac', '1',
+                '-threads', '0',
+                '-y',
+                output_path
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                return float(result.stdout.strip())
-        except:
-            pass
-        return None
-    
-    @staticmethod
-    def get_video_dimensions(video_path: str) -> Dict:
-        """الحصول على مقاسات الفيديو"""
-        try:
-            cmd = [
-                'ffprobe',
-                '-v', 'error',
-                '-select_streams', 'v:0',
-                '-show_entries', 'stream=width,height',
-                '-of', 'json',
-                video_path
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                if 'streams' in data and len(data['streams']) > 0:
-                    width = int(data['streams'][0].get('width', 0))
-                    height = int(data['streams'][0].get('height', 0))
-                    return {'width': width, 'height': height, 'aspect_ratio': width / height if height > 0 else 1.0}
-        except:
-            pass
-        return {'width': 1920, 'height': 1080, 'aspect_ratio': 16/9}
-    
-    @staticmethod
-    def create_subtitle_filter(subtitle_path: str, settings: Dict = None) -> str:
-        """إنشاء فلتر الترجمة"""
-        if not settings:
-            settings = {}
-        
-        # التأكد من أن المسار موجود
-        if not os.path.exists(subtitle_path):
-            logger.error(f"Subtitle file not found: {subtitle_path}")
-            raise Exception(f"ملف الترجمة غير موجود: {subtitle_path}")
-        
-        # استخدام مسار مطلق
-        abs_subtitle_path = os.path.abspath(subtitle_path)
-        logger.info(f"Using subtitle path: {abs_subtitle_path}")
-        
-        # Escape المسار بشكل صحيح لـ FFmpeg (يعمل على Windows و Mac)
-        # FFmpeg يتعامل مع المسارات بشكل مختلف حسب النظام
-        import platform
-        if platform.system() == 'Windows':
-            # Windows: استخدام backslash مع escape
-            subtitle_path_escaped = abs_subtitle_path.replace("\\", "\\\\")
-            subtitle_path_escaped = subtitle_path_escaped.replace(":", "\\:")
-        else:
-            # Unix/Mac: استخدام forward slash
-            subtitle_path_escaped = abs_subtitle_path.replace("\\", "/")
-            subtitle_path_escaped = subtitle_path_escaped.replace(":", "\\:")
-        
-        # Escape للـ shell
-        subtitle_path_escaped = subtitle_path_escaped.replace("'", "'\\''")
-        subtitle_path_escaped = f"'{subtitle_path_escaped}'"
-        
-        if subtitle_path.endswith('.ass'):
-            filter_str = f"ass={subtitle_path_escaped}"
-            logger.info(f"ASS filter: {filter_str}")
-            return filter_str
-        
-        filter_str = f"subtitles={subtitle_path_escaped}"
-        style_options = []
-        
-        font_name = settings.get('font_name', 'Arial')
-        style_options.append(f"FontName={font_name}")
-        
-        if settings.get('font_size'):
-            style_options.append(f"FontSize={int(settings['font_size'])}")
-        
-        if settings.get('font_color'):
-            color = settings['font_color'].replace('#', '')
-            if len(color) == 6:
-                r = color[0:2]
-                g = color[2:4]
-                b = color[4:6]
-                style_options.append(f"PrimaryColour=&H00{b}{g}{r}")
-        
-        if settings.get('bg_color'):
-            bg_color = settings['bg_color'].replace('#', '')
-            opacity = int(settings.get('bg_opacity', 180))
-            if len(bg_color) == 6:
-                r = bg_color[0:2]
-                g = bg_color[2:4]
-                b = bg_color[4:6]
-                opacity_hex = format(opacity, '02X')
-                style_options.append(f"BackColour=&H{opacity_hex}{b}{g}{r}")
-        
-        alignment = {'top': '8', 'center': '5', 'bottom': '2'}.get(settings.get('position', 'bottom'), '2')
-        style_options.append(f"Alignment={alignment}")
-        
-        if style_options:
-            style_str = ','.join(style_options)
-            filter_str = f"{filter_str}:force_style='{style_str}'"
-        
-        logger.info(f"Subtitle filter: {filter_str}")
-        return filter_str
-    
-    @staticmethod
-    def get_quality_settings(quality: str, use_filter: bool = False) -> List[str]:
-        """الحصول على إعدادات الجودة"""
-        if quality == 'original' and not use_filter:
-            return ['-c:v', 'copy']
-        elif quality == 'original' and use_filter:
-            return [
-                '-c:v', 'libx264',
-                '-preset', 'veryfast',
-                '-crf', '20',
-                '-profile:v', 'high',
-                '-level', '4.1',
-                '-pix_fmt', 'yuv420p',
-                '-threads', '0'
-            ]
-        elif quality == 'high':
-            return [
-                '-c:v', 'libx264',
-                '-preset', 'fast',
-                '-crf', '20',
-                '-profile:v', 'high',
-                '-level', '4.1',
-                '-pix_fmt', 'yuv420p',
-                '-threads', '0'
-            ]
-        elif quality == 'medium':
-            return [
-                '-c:v', 'libx264',
-                '-preset', 'fast',
-                '-crf', '23',
-                '-profile:v', 'main',
-                '-level', '4.0',
-                '-pix_fmt', 'yuv420p',
-                '-threads', '0'
-            ]
-        elif quality == 'low':
-            return [
-                '-c:v', 'libx264',
-                '-preset', 'ultrafast',
-                '-crf', '28',
-                '-profile:v', 'baseline',
-                '-level', '3.1',
-                '-pix_fmt', 'yuv420p',
-                '-vf', 'scale=w=min(iw\\,1280):h=-2',
-                '-threads', '0'
-            ]
-        else:
-            return ['-c:v', 'libx264', '-crf', '23', '-preset', 'fast', '-threads', '0']
-    
-    @staticmethod
-    def merge_subtitles(
-        video_path: str,
-        subtitle_path: str,
-        output_path: str,
-        quality: str = "original",
-        subtitle_settings: Dict = None
-    ) -> Dict:
-        """دمج الترجمة مع الفيديو"""
-        result = {
-            'success': False,
-            'message': '',
-            'output_file': None
-        }
-        
-        try:
-            if not VideoProcessor.check_ffmpeg():
-                raise Exception("ffmpeg غير متوفر. يرجى تثبيته أولاً")
             
-            subtitle_filter = VideoProcessor.create_subtitle_filter(subtitle_path, subtitle_settings)
-            quality_settings = VideoProcessor.get_quality_settings(quality, use_filter=True)
+            result = subprocess.run(cmd, capture_output=True, timeout=300)
+            return result.returncode == 0
+        except Exception as e:
+            logger.error(f"Audio extraction failed: {e}")
+            return False
+    
+    @staticmethod
+    def merge_subtitles(video_path: str, subtitle_path: str, 
+                       output_path: str, settings: Dict) -> bool:
+        """دمج الترجمة مع الفيديو"""
+        try:
+            # التأكد من أن المسارات مطلقة
+            video_path = str(Path(video_path).resolve())
+            subtitle_path = str(Path(subtitle_path).resolve())
+            output_path = str(Path(output_path).resolve())
+            
+            # إنشاء ملف ASS
+            if subtitle_path.endswith('.srt'):
+                with open(subtitle_path, 'r', encoding='utf-8') as f:
+                    srt_content = f.read()
+                
+                ass_content = SubtitleProcessor.create_ass(srt_content, settings)
+                ass_path = subtitle_path.replace('.srt', '.ass')
+                
+                with open(ass_path, 'w', encoding='utf-8') as f:
+                    f.write(ass_content)
+                
+                subtitle_path = str(Path(ass_path).resolve())
+            
+            # Escape المسار للـ ffmpeg
+            # المشكلة: f-string يحاول تفسير أحرف خاصة في المسار
+            # الحل: استخدام string concatenation بدلاً من f-string
+            import platform
+            if platform.system() == 'Windows':
+                subtitle_path_escaped = subtitle_path.replace('\\', '/').replace(':', '\\:')
+            else:
+                # على Linux/Mac، escape المسافات والأحرف الخاصة
+                subtitle_path_escaped = subtitle_path.replace('\\', '\\\\').replace(' ', '\\ ')
+            
+            # دمج مع الفيديو
+            # استخدام string concatenation لتجنب مشاكل f-string
+            vf_filter = 'ass=' + subtitle_path_escaped
             
             cmd = [
                 'ffmpeg',
                 '-i', video_path,
-                '-vf', subtitle_filter,
+                '-vf', vf_filter,
                 '-c:a', 'copy',
+                '-c:v', 'libx264',
+                '-preset', 'fast',
+                '-crf', '23',
                 '-threads', '0',
-                '-movflags', '+faststart',
+                '-y',
+                output_path
             ]
-            cmd.extend(quality_settings)
-            cmd.extend(['-y', output_path])
             
-            logger.info(f"FFmpeg command: {' '.join(cmd)}")
+            logger.info(f"Running ffmpeg command: {' '.join(cmd)}")
             
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
+            process = subprocess.run(cmd, capture_output=True, timeout=600, text=True)
+            
+            if process.returncode != 0:
+                logger.error(f"FFmpeg error: {process.stderr}")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Subtitle merge failed: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+
+# =============================================================================
+# محسّن التحميل مع دعم JSON API
+# =============================================================================
+
+class SmartMediaDownloader:
+    """محمل الوسائط الذكي مع استراتيجيات متعددة للتحميل"""
+    
+    def __init__(self, output_dir: str = None):
+        if output_dir is None:
+            output_dir = app.config.get('DOWNLOAD_FOLDER', 'downloads')
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True)
+        self.check_dependencies()
+    
+    def check_dependencies(self):
+        """التحقق من الأدوات المطلوبة"""
+        self.available_tools = {
+            'yt-dlp': self._check_command('yt-dlp'),
+            'ffmpeg': self._check_command('ffmpeg')
+        }
+        
+        if not self.available_tools['yt-dlp']:
+            self._install_yt_dlp()
+    
+    def _check_command(self, cmd: str) -> bool:
+        try:
+            subprocess.run([cmd, '--version'], 
+                         capture_output=True, 
+                         check=True, 
+                         timeout=5)
+            return True
+        except:
+            return False
+    
+    def _install_yt_dlp(self):
+        try:
+            subprocess.run(['pip', 'install', '-U', 'yt-dlp', '-q'],
+                         check=True)
+            self.available_tools['yt-dlp'] = True
+        except:
+            pass
+    
+    def detect_platform(self, url: str) -> str:
+        """الكشف عن المنصة من الرابط"""
+        url_lower = url.lower()
+        
+        if any(x in url_lower for x in ['twitter.com', 'x.com', 't.co']):
+            return 'twitter'
+        elif any(x in url_lower for x in ['youtube.com', 'youtu.be']):
+            return 'youtube'
+        elif 'instagram.com' in url_lower:
+            return 'instagram'
+        elif 'tiktok.com' in url_lower:
+            return 'tiktok'
+        elif 'facebook.com' in url_lower or 'fb.watch' in url_lower:
+            return 'facebook'
+        else:
+            return 'unknown'
+    
+    def get_available_formats(self, url: str) -> dict:
+        """
+        الحصول على جميع التنسيقات المتاحة للفيديو باستخدام JSON
+        هذه النسخة المحسّنة تكتشف 4K/8K وجميع الجودات بدقة
+        """
+        try:
+            # استخدام JSON API من yt-dlp (أدق وأسرع)
+            cmd = [
+                'yt-dlp',
+                '--dump-json',
+                '--no-warnings',
+                '--skip-download',
+                url
+            ]
+            
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                timeout=60
             )
             
-            try:
-                stdout, stderr = process.communicate(timeout=600)
-                
-                if process.returncode == 0:
-                    result['success'] = True
-                    result['message'] = 'تم دمج الترجمة بنجاح'
-                    result['output_file'] = output_path
-                else:
-                    error_msg = stderr or stdout
-                    logger.error(f"FFmpeg error: {error_msg}")
-                    raise Exception(f"FFmpeg error: {error_msg}")
-            except subprocess.TimeoutExpired:
-                process.kill()
-                raise Exception("انتهت مهلة المعالجة. الملف كبير جداً")
-        
+            if result.returncode != 0:
+                return {'success': False, 'error': 'Could not fetch formats'}
+            
+            # تحليل JSON
+            video_info = json.loads(result.stdout)
+            
+            # استخراج التنسيقات بذكاء
+            formats = self._parse_formats_from_json(video_info)
+            
+            # إنشاء presets ذكية
+            presets = self._create_smart_presets_from_json(formats, video_info)
+            
+            # معلومات الفيديو
+            info = {
+                'title': video_info.get('title', 'Unknown'),
+                'uploader': video_info.get('uploader', 'Unknown'),
+                'duration': video_info.get('duration', 0),
+                'thumbnail': video_info.get('thumbnail', ''),
+                'description': video_info.get('description', '')[:200],
+                'view_count': video_info.get('view_count', 0),
+                'like_count': video_info.get('like_count', 0)
+            }
+            
+            return {
+                'success': True,
+                'formats': formats,
+                'presets': presets,
+                'info': info,
+                'platform': self.detect_platform(url)
+            }
+            
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'error': 'Request timeout'}
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parse error: {e}")
+            return {'success': False, 'error': 'Failed to parse video info'}
         except Exception as e:
-            result['message'] = f'خطأ في دمج الترجمة: {str(e)}'
-            logger.error(f"Merge error: {e}")
-            logger.error(traceback.format_exc())
+            logger.error(f"Error fetching formats: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    def _parse_formats_from_json(self, video_info: Dict) -> Dict:
+        """
+        تحليل التنسيقات من JSON - نسخة محسّنة ودقيقة
+        تكتشف 8K, 4K, 1440p, 1080p, 720p, 480p, 360p تلقائياً
+        """
+        formats = {
+            'video_audio': [],
+            'video_only': [],
+            'audio_only': [],
+            'all_heights': set(),
+            'max_height': 0,
+            'by_height': {}
+        }
         
-        return result
+        raw_formats = video_info.get('formats', [])
+        
+        for fmt in raw_formats:
+            format_id = fmt.get('format_id', '')
+            ext = fmt.get('ext', '')
+            height = fmt.get('height')
+            width = fmt.get('width')
+            fps = fmt.get('fps', 0)
+            vcodec = fmt.get('vcodec', 'none')
+            acodec = fmt.get('acodec', 'none')
+            filesize = fmt.get('filesize') or fmt.get('filesize_approx', 0)
+            tbr = fmt.get('tbr', 0)
+            vbr = fmt.get('vbr', 0)
+            abr = fmt.get('abr', 0)
+            
+            format_info = {
+                'id': format_id,
+                'ext': ext,
+                'height': height,
+                'width': width,
+                'fps': int(fps) if fps else None,
+                'vcodec': vcodec,
+                'acodec': acodec,
+                'filesize': filesize,
+                'filesize_mb': round(filesize / (1024 * 1024), 2) if filesize else None,
+                'tbr': round(tbr, 2) if tbr else None,
+                'vbr': round(vbr, 2) if vbr else None,
+                'abr': round(abr, 2) if abr else None,
+                'resolution': f"{height}p" if height else None,
+                'quality': fmt.get('quality', 0),
+                'format_note': fmt.get('format_note', ''),
+                'protocol': fmt.get('protocol', ''),
+                'container': fmt.get('container', ''),
+                'has_drm': fmt.get('has_drm', False)
+            }
+            
+            # تصنيف التنسيق
+            if vcodec != 'none' and acodec != 'none':
+                format_info['type'] = 'video_audio'
+                format_info['note'] = f"{height}p" if height else 'Video+Audio'
+                formats['video_audio'].append(format_info)
+                
+                if height:
+                    formats['all_heights'].add(height)
+                    formats['max_height'] = max(formats['max_height'], height)
+                    
+                    if height not in formats['by_height']:
+                        formats['by_height'][height] = []
+                    formats['by_height'][height].append(format_info)
+                    
+            elif vcodec != 'none' and acodec == 'none':
+                format_info['type'] = 'video_only'
+                format_info['note'] = f"{height}p (No Audio)" if height else 'Video Only'
+                formats['video_only'].append(format_info)
+                
+                if height:
+                    formats['all_heights'].add(height)
+                    formats['max_height'] = max(formats['max_height'], height)
+                    
+                    if height not in formats['by_height']:
+                        formats['by_height'][height] = []
+                    formats['by_height'][height].append(format_info)
+                    
+            elif vcodec == 'none' and acodec != 'none':
+                format_info['type'] = 'audio_only'
+                format_info['bitrate'] = f"{int(abr)}kbps" if abr else 'Unknown'
+                format_info['note'] = f"Audio {int(abr)}kbps" if abr else 'Audio'
+                formats['audio_only'].append(format_info)
+        
+        formats['all_heights'] = sorted(list(formats['all_heights']), reverse=True)
+        
+        formats['video_audio'].sort(
+            key=lambda x: (
+                x['height'] or 0, 
+                x['fps'] or 0,
+                x['tbr'] or 0
+            ), 
+            reverse=True
+        )
+        
+        formats['video_only'].sort(
+            key=lambda x: (
+                x['height'] or 0,
+                x['fps'] or 0,
+                x['vbr'] or 0
+            ), 
+            reverse=True
+        )
+        
+        formats['audio_only'].sort(
+            key=lambda x: x['abr'] or 0, 
+            reverse=True
+        )
+        
+        return formats
+    
+    def _create_smart_presets_from_json(self, formats: Dict, video_info: Dict) -> List[Dict]:
+        """
+        إنشاء presets ذكية بناءً على التنسيقات المتاحة من JSON
+        يكتشف تلقائياً 8K, 4K, 1440p, 1080p, وجميع الجودات المتاحة
+        """
+        presets = []
+        all_heights = formats.get('all_heights', [])
+        max_height = formats.get('max_height', 0)
+        by_height = formats.get('by_height', {})
+        
+        # 1. أفضل جودة (دائماً موجود)
+        best_description = f'أعلى جودة متاحة ({max_height}p)' if max_height else 'أعلى جودة متاحة'
+        
+        if max_height and max_height in by_height:
+            best_formats = by_height[max_height]
+            if best_formats:
+                best_fmt = best_formats[0]
+                fps_info = f" @ {best_fmt['fps']}fps" if best_fmt.get('fps') else ""
+                size_info = f" • {best_fmt['filesize_mb']} MB" if best_fmt.get('filesize_mb') else ""
+                best_description = f"{max_height}p{fps_info}{size_info}"
+        
+        presets.append({
+            'id': 'best',
+            'name': '⭐ أفضل جودة',
+            'description': best_description,
+            'icon': 'crown',
+            'command': 'bestvideo+bestaudio/best',
+            'height': max_height,
+            'priority': 100
+        })
+        
+        # 2. كشف الجودات المتاحة بذكاء
+        quality_definitions = [
+            {
+                'height': 4320, 
+                'id': '8k', 
+                'name': '8K Ultra HD', 
+                'description': '4320p - جودة خيالية 🔥', 
+                'icon': 'sparkles',
+                'emoji': '🎆'
+            },
+            {
+                'height': 2160, 
+                'id': '4k', 
+                'name': '4K Ultra HD', 
+                'description': '2160p - جودة فائقة', 
+                'icon': 'gem',
+                'emoji': '💎'
+            },
+            {
+                'height': 1440, 
+                'id': '1440p', 
+                'name': '1440p QHD', 
+                'description': 'جودة عالية جداً', 
+                'icon': 'star',
+                'emoji': '⭐'
+            },
+            {
+                'height': 1080, 
+                'id': '1080p', 
+                'name': '1080p Full HD', 
+                'description': 'جودة ممتازة', 
+                'icon': 'video',
+                'emoji': '📺'
+            },
+            {
+                'height': 720, 
+                'id': '720p', 
+                'name': '720p HD', 
+                'description': 'جودة جيدة - حجم متوازن', 
+                'icon': 'film',
+                'emoji': '📹'
+            },
+            {
+                'height': 480, 
+                'id': '480p', 
+                'name': '480p SD', 
+                'description': 'جودة متوسطة - حجم صغير', 
+                'icon': 'smartphone',
+                'emoji': '📱'
+            },
+            {
+                'height': 360, 
+                'id': '360p', 
+                'name': '360p Low', 
+                'description': 'جودة منخفضة - سريع', 
+                'icon': 'phone',
+                'emoji': '📵'
+            }
+        ]
+        
+        for quality_def in quality_definitions:
+            height = quality_def['height']
+            
+            if height in all_heights:
+                additional_info = ""
+                if height in by_height and by_height[height]:
+                    best_of_height = by_height[height][0]
+                    
+                    if best_of_height.get('fps'):
+                        additional_info += f" @ {best_of_height['fps']}fps"
+                    
+                    if best_of_height.get('filesize_mb'):
+                        additional_info += f" • ~{best_of_height['filesize_mb']} MB"
+                    
+                    if best_of_height.get('tbr'):
+                        additional_info += f" • {best_of_height['tbr']} kbps"
+                
+                description = quality_def['description']
+                if additional_info:
+                    description += additional_info
+                
+                presets.append({
+                    'id': quality_def['id'],
+                    'name': f"{quality_def['emoji']} {quality_def['name']}",
+                    'description': description,
+                    'icon': quality_def['icon'],
+                    'command': f"bestvideo[height<={height}]+bestaudio/best[height<={height}]",
+                    'height': height,
+                    'priority': 90 - (len(presets) * 5)
+                })
+        
+        # 3. صوت فقط
+        if formats.get('audio_only'):
+            best_audio = formats['audio_only'][0]
+            bitrate = best_audio.get('bitrate', 'Unknown')
+            filesize_mb = best_audio.get('filesize_mb')
+            
+            audio_description = f'MP3 بأفضل جودة'
+            if bitrate != 'Unknown':
+                audio_description += f' ({bitrate})'
+            if filesize_mb:
+                audio_description += f' • ~{filesize_mb} MB'
+            
+            presets.append({
+                'id': 'audio',
+                'name': '🎵 صوت فقط',
+                'description': audio_description,
+                'icon': 'music',
+                'command': 'bestaudio/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
+                'priority': 50
+            })
+        
+        presets.sort(key=lambda x: x.get('priority', 0), reverse=True)
+        
+        logger.info(f"Created {len(presets)} smart presets. Heights available: {all_heights}")
+        
+        return presets
+    
+    def download_with_format(self, url: str, format_command: str, 
+                            download_id: str, is_audio: bool = False):
+        """التحميل مع تنسيق محدد باستخدام استراتيجيات متعددة"""
+        try:
+            download_progress[download_id] = {
+                'status': 'starting',
+                'percent': '0%',
+                'method': 'Attempting download...'
+            }
+            
+            success = self._download_strategy_1(url, format_command, download_id, is_audio)
+            
+            if not success:
+                download_progress[download_id]['method'] = 'Trying with cookies...'
+                success = self._download_strategy_2(url, format_command, download_id, is_audio)
+            
+            if not success:
+                download_progress[download_id]['method'] = 'Trying compatible format...'
+                success = self._download_strategy_3(url, download_id, is_audio)
+            
+            if not success:
+                download_progress[download_id]['method'] = 'Last attempt...'
+                success = self._download_strategy_4(url, download_id, is_audio)
+            
+            if success:
+                download_progress[download_id] = {
+                    'status': 'completed',
+                    'percent': '100%',
+                    'message': 'تم التحميل بنجاح!'
+                }
+                return {'success': True}
+            else:
+                download_progress[download_id] = {
+                    'status': 'error',
+                    'message': 'فشل التحميل بجميع الطرق'
+                }
+                return {'success': False, 'error': 'All strategies failed'}
+                
+        except Exception as e:
+            download_progress[download_id] = {
+                'status': 'error',
+                'message': str(e)
+            }
+            return {'success': False, 'error': str(e)}
+    
+    def _download_strategy_1(self, url: str, format_cmd: str, download_id: str, is_audio: bool) -> bool:
+        try:
+            output_template = str(self.output_dir / '%(title)s.%(ext)s')
+            
+            cmd = ['yt-dlp']
+            
+            if is_audio or format_cmd == 'audio':
+                cmd.extend(['-x', '--audio-format', 'mp3', '--audio-quality', '0'])
+            else:
+                cmd.extend(['-f', format_cmd, '--merge-output-format', 'mp4'])
+            
+            cmd.extend([
+                '-o', output_template,
+                '--no-warnings',
+                '--newline',
+                url
+            ])
+            
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
+                                      stderr=subprocess.STDOUT, text=True, bufsize=1)
+            
+            return self._monitor_download(process, download_id)
+            
+        except Exception as e:
+            logger.error(f"Strategy 1 failed: {e}")
+            return False
+    
+    def _download_strategy_2(self, url: str, format_cmd: str, download_id: str, is_audio: bool) -> bool:
+        try:
+            output_template = str(self.output_dir / '%(title)s.%(ext)s')
+            
+            cmd = ['yt-dlp', '--cookies-from-browser', 'chrome']
+            
+            if is_audio or format_cmd == 'audio':
+                cmd.extend(['-x', '--audio-format', 'mp3'])
+            else:
+                cmd.extend(['-f', format_cmd])
+            
+            cmd.extend(['-o', output_template, '--no-warnings', url])
+            
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
+                                      stderr=subprocess.STDOUT, text=True, bufsize=1)
+            
+            return self._monitor_download(process, download_id)
+            
+        except Exception as e:
+            logger.error(f"Strategy 2 failed: {e}")
+            return False
+    
+    def _download_strategy_3(self, url: str, download_id: str, is_audio: bool) -> bool:
+        try:
+            output_template = str(self.output_dir / '%(title)s.%(ext)s')
+            
+            cmd = ['yt-dlp']
+            
+            if is_audio:
+                cmd.extend(['-x', '--audio-format', 'mp3'])
+            else:
+                cmd.extend(['-f', 'best[ext=mp4]/best'])
+            
+            cmd.extend(['-o', output_template, '--no-warnings', url])
+            
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
+                                      stderr=subprocess.STDOUT, text=True, bufsize=1)
+            
+            return self._monitor_download(process, download_id)
+            
+        except Exception as e:
+            logger.error(f"Strategy 3 failed: {e}")
+            return False
+    
+    def _download_strategy_4(self, url: str, download_id: str, is_audio: bool) -> bool:
+        try:
+            output_template = str(self.output_dir / '%(title)s.%(ext)s')
+            
+            cmd = ['yt-dlp', '-o', output_template, '--no-warnings', url]
+            
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
+                                      stderr=subprocess.STDOUT, text=True, bufsize=1)
+            
+            return self._monitor_download(process, download_id)
+            
+        except Exception as e:
+            logger.error(f"Strategy 4 failed: {e}")
+            return False
+    
+    def _monitor_download(self, process, download_id: str) -> bool:
+        try:
+            for line in process.stdout:
+                if '[download]' in line and '%' in line:
+                    parts = line.split()
+                    for i, part in enumerate(parts):
+                        if '%' in part:
+                            download_progress[download_id] = {
+                                'status': 'downloading',
+                                'percent': part
+                            }
+                            break
+            
+            process.wait()
+            return process.returncode == 0
+            
+        except Exception as e:
+            logger.error(f"Monitor failed: {e}")
+            return False
+
+# Initialize downloader
+downloader = SmartMediaDownloader()
 
 
-# تهيئة الكائنات
-downloader = VideoDownloader()
-
-
-# === Routes ===
+# =============================================================================
+# API Routes
+# =============================================================================
 
 @app.route('/')
 def index():
     """الصفحة الرئيسية"""
-    return render_template('index.html',
-                         whisper_available=WHISPER_AVAILABLE,
-                         translator_available=TRANSLATOR_AVAILABLE)
+    return render_template('index.html')
 
 
 @app.route('/api/instant-translate', methods=['POST'])
 def api_instant_translate():
-    """API للترجمة الفورية"""
+    """API الترجمة الفورية المحسّنة"""
     try:
         data = request.json
-        
-        if not data:
-            logger.error("No JSON data received")
-            return jsonify({'success': False, 'message': 'لم يتم استلام بيانات'}), 400
-        
         step = data.get('step')
-        
-        if not step:
-            logger.error(f"Missing step in request data: {data.keys()}")
-            return jsonify({'success': False, 'message': 'خطوة غير محددة'}), 400
-        
-        logger.info(f"Processing step: {step}")
-        logger.debug(f"Request data keys: {data.keys()}")
         
         if step == 'download':
             url = data.get('url')
@@ -1271,447 +1072,431 @@ def api_instant_translate():
             if not url:
                 return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
             
-            # استخدام quality مباشرة بدلاً من quality_map
-            # لأن downloader.download يتعامل مع quality كـ string
-            result = downloader.download(url, quality)
+            # استخدام yt-dlp مباشرة
+            download_folder = Path(app.config['DOWNLOAD_FOLDER'])
             
-            if result['success']:
-                video_file = result['file']
-                if not os.path.isabs(video_file):
-                    video_file = os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file))
-                video_file = os.path.normpath(video_file)
+            # تحديد format command من quality
+            if quality == 'best':
+                format_cmd = 'bestvideo+bestaudio/best'
+            elif quality == '720p':
+                format_cmd = 'bestvideo[height<=720]+bestaudio/best[height<=720]'
+            elif quality == '480p':
+                format_cmd = 'bestvideo[height<=480]+bestaudio/best[height<=480]'
+            elif quality == '1080p':
+                format_cmd = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]'
+            elif quality == '4k' or quality == '2160p':
+                format_cmd = 'bestvideo[height<=2160]+bestaudio/best[height<=2160]'
+            else:
+                format_cmd = quality
+            
+            ydl_opts = {
+                'format': format_cmd,
+                'outtmpl': str(download_folder / '%(title)s.%(ext)s'),
+                'quiet': True,
+                'no_warnings': True
+            }
+            
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    filename = ydl.prepare_filename(info)
                 
-                if not os.path.exists(video_file):
-                    basename = os.path.basename(video_file)
-                    possible_paths = [
-                        os.path.join(app.config['DOWNLOAD_FOLDER'], basename),
-                        video_file
-                    ]
-                    for path in possible_paths:
-                        if os.path.exists(path):
-                            video_file = path
-                            break
+                # التأكد من أن الملف موجود
+                if not os.path.exists(filename):
+                    # البحث عن أحدث ملف
+                    video_files = []
+                    for file in download_folder.iterdir():
+                        if file.is_file():
+                            ext = file.suffix.lower()
+                            if ext in ['.mp4', '.webm', '.mkv', '.mov', '.avi', '.flv']:
+                                video_files.append((file, file.stat().st_mtime))
+                    
+                    if video_files:
+                        video_files.sort(key=lambda x: x[1], reverse=True)
+                        filename = str(video_files[0][0])
                 
-                # استخدام ملف مؤقت بدلاً من session لتقليل حجم cookie
-                temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+                if not os.path.exists(filename):
+                    return jsonify({
+                        'success': False,
+                        'message': 'تم التحميل لكن الملف غير موجود'
+                    }), 400
+                
+                # استخدام ملف مؤقت
+                temp_file = download_folder / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
                 with open(temp_file, 'w') as f:
-                    f.write(video_file)
+                    f.write(filename)
                 
                 return jsonify({
                     'success': True,
-                    'file': video_file,
-                    'info': result['info'],
-                    'temp_file': os.path.basename(temp_file)
+                    'file': filename,
+                    'temp_file': temp_file.name
                 })
-            else:
-                # إرجاع رسالة الخطأ بشكل واضح
-                error_message = result.get('message', 'حدث خطأ غير معروف أثناء التحميل')
-                logger.error(f"Download failed: {error_message}")
+                
+            except Exception as e:
+                logger.error(f"Download error: {e}")
                 return jsonify({
                     'success': False,
-                    'message': error_message
-                }), 400
+                    'message': f'خطأ في التحميل: {str(e)}'
+                }), 500
         
         elif step == 'extract_audio':
             video_file = data.get('video_file')
             
             # قراءة من الملف المؤقت إذا لزم الأمر
             if not video_file and data.get('temp_video_file'):
-                temp_path = os.path.join(app.config['DOWNLOAD_FOLDER'], data['temp_video_file'])
-                if os.path.exists(temp_path):
+                temp_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_video_file']
+                if temp_path.exists():
                     with open(temp_path, 'r') as f:
                         video_file = f.read().strip()
             
-            if video_file and not os.path.isabs(video_file):
-                normalized = video_file.replace('downloads/', '').replace('downloads\\', '')
-                possible_paths = [
-                    os.path.join(app.config['DOWNLOAD_FOLDER'], normalized),
-                    os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file)),
-                    video_file,
-                    normalized
-                ]
-                for path in possible_paths:
-                    abs_path = os.path.abspath(path)
-                    if os.path.exists(abs_path):
-                        video_file = abs_path
-                        break
-            
             if not video_file or not os.path.exists(video_file):
-                return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
+                return jsonify({
+                    'success': False,
+                    'message': 'ملف الفيديو غير موجود'
+                }), 400
             
             audio_file = video_file.rsplit('.', 1)[0] + '_audio.wav'
             
-            cmd = [
-                'ffmpeg',
-                '-i', video_file,
-                '-vn',
-                '-acodec', 'pcm_s16le',
-                '-ar', '16000',
-                '-ac', '1',
-                '-threads', '0',
-                '-y',
-                audio_file
-            ]
+            success = VideoProcessor.extract_audio(video_file, audio_file)
             
-            try:
-                result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
-                # حفظ في ملف مؤقت بدلاً من session
-                temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+            if success:
+                temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
                 with open(temp_file, 'w') as f:
                     f.write(audio_file)
                 
                 return jsonify({
                     'success': True,
                     'audio_file': audio_file,
-                    'temp_file': os.path.basename(temp_file)
+                    'temp_file': temp_file.name
                 })
-            except subprocess.CalledProcessError as e:
-                logger.error(f"FFmpeg error: {e.stderr}")
-                return jsonify({'success': False, 'message': f'خطأ في استخراج الصوت: {e.stderr}'}), 500
-            except subprocess.TimeoutExpired:
-                return jsonify({'success': False, 'message': 'انتهت مهلة استخراج الصوت'}), 500
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': 'فشل استخراج الصوت'
+                }), 500
         
         elif step == 'transcribe':
-            if not WHISPER_AVAILABLE:
-                return jsonify({'success': False, 'message': 'Whisper غير متوفر'}), 503
-            
             audio_file = data.get('audio_file')
-            model_size = data.get('model', 'base')
+            model = data.get('model', 'base')
             language = data.get('language', 'auto')
             
             # قراءة من الملف المؤقت إذا لزم الأمر
             if not audio_file and data.get('temp_audio_file'):
-                temp_path = os.path.join(app.config['DOWNLOAD_FOLDER'], data['temp_audio_file'])
-                if os.path.exists(temp_path):
+                temp_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_audio_file']
+                if temp_path.exists():
                     with open(temp_path, 'r') as f:
                         audio_file = f.read().strip()
             
             if not audio_file or not os.path.exists(audio_file):
-                return jsonify({'success': False, 'message': 'ملف الصوت غير موجود'}), 400
+                return jsonify({
+                    'success': False,
+                    'message': 'ملف الصوت غير موجود'
+                }), 400
             
-            # استخدام الدالة المساعدة التي تستخدم Faster Whisper تلقائياً
-            result = transcribe_audio(audio_file, model_size, language, use_faster=True)
+            result = whisper_transcriber.transcribe(audio_file, model, language)
             
-            # حفظ في ملف مؤقت بدلاً من session
-            temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+            # حفظ في ملف مؤقت
+            temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
             with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'text': result['text'],
-                    'language': result.get('language', language),
-                    'segments': result.get('segments', [])
-                }, f, ensure_ascii=False)
+                json.dump(result, f, ensure_ascii=False, indent=2)
             
             return jsonify({
                 'success': True,
-                'text': result['text'],
-                'language': result.get('language', language),
-                'segments': result.get('segments', []),
-                'temp_file': os.path.basename(temp_file)
+                'temp_file': temp_file.name,
+                **result
             })
         
         elif step == 'translate':
-            if not TRANSLATOR_AVAILABLE:
-                return jsonify({'success': False, 'message': 'المترجم غير متوفر'}), 503
-            
-            text = data.get('text') or session.get('transcript')
+            text = data.get('text')
             source_lang = data.get('source_lang', 'auto')
             
             if not text:
-                return jsonify({'success': False, 'message': 'لا يوجد نص للترجمة'}), 400
+                return jsonify({
+                    'success': False,
+                    'message': 'لا يوجد نص للترجمة'
+                }), 400
+            
+            if not TRANSLATOR_AVAILABLE:
+                return jsonify({
+                    'success': False,
+                    'message': 'المترجم غير متوفر'
+                }), 503
             
             translator = GoogleTranslator(source=source_lang, target='ar')
             translated = translator.translate(text)
             
-            # حفظ في ملف مؤقت بدلاً من session
-            temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+            # حفظ في ملف مؤقت
+            temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
             with open(temp_file, 'w', encoding='utf-8') as f:
                 f.write(translated)
             
             return jsonify({
                 'success': True,
                 'translated_text': translated,
-                'temp_file': os.path.basename(temp_file)
+                'temp_file': temp_file.name
             })
         
         elif step == 'merge':
-            video_file = data.get('video_file')
-            subtitle_text = data.get('subtitle_text')  # هذا للنص الكامل فقط (fallback)
-            settings = data.get('settings', {})
-            quality = data.get('quality', 'original')
+            logger.info(f"Merge step called with data keys: {list(data.keys())}")
             
-            # قراءة من الملفات المؤقتة إذا لزم الأمر
+            video_file = data.get('video_file')
+            # دعم كلا الاسمين: subtitle_text و translated_text
+            subtitle_text = data.get('subtitle_text') or data.get('translated_text')
+            
+            logger.info(f"Initial values: video_file={bool(video_file)}, subtitle_text={bool(subtitle_text)}")
+            
+            # قراءة من الملف المؤقت إذا لزم الأمر
             if not video_file and data.get('temp_video_file'):
-                temp_path = os.path.join(app.config['DOWNLOAD_FOLDER'], data['temp_video_file'])
-                if os.path.exists(temp_path):
+                temp_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_video_file']
+                logger.info(f"Trying to read video from temp file: {temp_path}")
+                if temp_path.exists():
                     with open(temp_path, 'r') as f:
                         video_file = f.read().strip()
+                        logger.info(f"Read video_file from temp: {video_file}")
+                else:
+                    logger.warning(f"Temp video file not found: {temp_path}")
             
             if not subtitle_text and data.get('temp_translated_file'):
-                temp_path = os.path.join(app.config['DOWNLOAD_FOLDER'], data['temp_translated_file'])
-                if os.path.exists(temp_path):
+                temp_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_translated_file']
+                logger.info(f"Trying to read subtitle from temp file: {temp_path}")
+                if temp_path.exists():
                     with open(temp_path, 'r', encoding='utf-8') as f:
                         subtitle_text = f.read().strip()
-            
-            if video_file and not os.path.isabs(video_file):
-                possible_paths = [
-                    os.path.join(app.config['DOWNLOAD_FOLDER'], video_file),
-                    os.path.join(app.config['UPLOAD_FOLDER'], video_file),
-                    video_file
-                ]
-                for path in possible_paths:
-                    if os.path.exists(path):
-                        video_file = path
-                        break
-            
-            if not video_file or not os.path.exists(video_file):
-                return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
-            
-            video_duration = VideoProcessor.get_video_duration(video_file)
-            
-            # قراءة البيانات من الملفات المؤقتة بدلاً من session
-            whisper_segments = None
-            original_text = ''
-            source_language = 'auto'
-            
-            # البحث عن ملفات مؤقتة
-            temp_transcript_file = data.get('temp_transcript_file')
-            if temp_transcript_file:
-                temp_path = os.path.join(app.config['DOWNLOAD_FOLDER'], temp_transcript_file)
-                if os.path.exists(temp_path):
-                    with open(temp_path, 'r', encoding='utf-8') as f:
-                        transcript_data = json.load(f)
-                        whisper_segments = transcript_data.get('segments', [])
-                        original_text = transcript_data.get('text', '')
-                        source_language = transcript_data.get('language', 'auto')
-            
-            # استخدام segments المترجمة فقط - لا نستخدم subtitle_text
-            if whisper_segments and len(whisper_segments) > 0:
-                # تقسيم segments الطويلة إلى أجزاء أصغر بناءً على الكلام والوقفات
-                logger.info(f"Original segments count: {len(whisper_segments)}")
-                
-                # التحقق من وجود word timestamps
-                has_word_timestamps = any(seg.get('words') for seg in whisper_segments)
-                logger.info(f"Has word timestamps: {has_word_timestamps}")
-                
-                whisper_segments = SubtitleProcessor.split_long_segments(
-                    whisper_segments, 
-                    max_duration=5.0,  # 5 ثواني كحد أقصى
-                    max_chars=80       # 80 حرف كحد أقصى
-                )
-                logger.info(f"After intelligent splitting: {len(whisper_segments)} segments")
-                
-                segments_for_srt = []
-                translator = GoogleTranslator(source=source_language, target='ar')
-                
-                logger.info(f"Translating {len(whisper_segments)} segments...")
-                
-                for i, segment in enumerate(whisper_segments):
-                    start_time = float(segment.get('start', 0))
-                    end_time = float(segment.get('end', start_time + 3))
-                    original_segment_text = segment.get('text', '').strip()
-                    
-                    if not original_segment_text:
-                        continue
-                    
-                    # التأكد من أن المدة معقولة
-                    if end_time - start_time > 7.0:
-                        # تقسيم إضافي إذا كانت المدة طويلة جداً
-                        words = original_segment_text.split()
-                        words_per_second = len(words) / (end_time - start_time) if (end_time - start_time) > 0 else 2
-                        target_words = int(words_per_second * 5)  # 5 ثواني كحد أقصى
-                        
-                        if len(words) > target_words:
-                            # تقسيم إلى جمل أصغر
-                            sub_segments = []
-                            current_words = []
-                            current_start = start_time
-                            word_duration = (end_time - start_time) / len(words) if len(words) > 0 else 0.5
-                            
-                            for j, word in enumerate(words):
-                                current_words.append(word)
-                                
-                                # إذا وصلنا للحد الأقصى أو انتهت الجملة
-                                if len(current_words) >= target_words or word.endswith(('.', '!', '?', '،', '؛')):
-                                    sub_text = ' '.join(current_words)
-                                    sub_end = current_start + (len(current_words) * word_duration)
-                                    
-                                    sub_segments.append({
-                                        'start': current_start,
-                                        'end': sub_end,
-                                        'text': sub_text
-                                    })
-                                    
-                                    current_start = sub_end
-                                    current_words = []
-                            
-                            # إضافة أي كلمات متبقية
-                            if current_words:
-                                sub_text = ' '.join(current_words)
-                                sub_segments.append({
-                                    'start': current_start,
-                                    'end': end_time,
-                                    'text': sub_text
-                                })
-                            
-                            # ترجمة sub_segments
-                            for sub_seg in sub_segments:
-                                try:
-                                    translated_text = translator.translate(sub_seg['text'])
-                                    segments_for_srt.append({
-                                        'start': sub_seg['start'],
-                                        'end': sub_seg['end'],
-                                        'text': translated_text.strip()
-                                    })
-                                except Exception as e:
-                                    logger.warning(f"Translation failed: {e}")
-                                    segments_for_srt.append({
-                                        'start': sub_seg['start'],
-                                        'end': sub_seg['end'],
-                                        'text': sub_seg['text']
-                                    })
-                            continue
-                    
-                    try:
-                        translated_segment_text = translator.translate(original_segment_text)
-                    except Exception as e:
-                        logger.warning(f"Translation failed for segment {i+1}: {e}")
-                        translated_segment_text = original_segment_text
-                    
-                    if translated_segment_text.strip():
-                        segments_for_srt.append({
-                            'start': start_time,
-                            'end': end_time,
-                            'text': translated_segment_text.strip()
-                        })
-                
-                # استخدام segments المترجمة فقط لإنشاء SRT
-                if segments_for_srt:
-                    logger.info(f"Creating SRT from {len(segments_for_srt)} translated segments")
-                    srt_content = SubtitleProcessor.create_srt(
-                        '',  # نص فارغ - نستخدم segments فقط
-                        duration=video_duration,
-                        segments=segments_for_srt
-                    )
+                        logger.info(f"Read subtitle_text from temp, length: {len(subtitle_text)}")
                 else:
-                    # إذا لم تكن هناك segments، استخدم النص المترجم (fallback)
-                    logger.warning("No segments available, using full text as fallback")
-                    srt_content = SubtitleProcessor.create_srt(
-                        subtitle_text or original_text,
-                        duration=video_duration
-                    )
-            else:
-                # إذا لم تكن هناك segments، استخدم النص المترجم فقط
-                logger.warning("No whisper segments found, using full text")
-                srt_content = SubtitleProcessor.create_srt(
-                    subtitle_text or '',
-                    duration=video_duration
-                )
+                    logger.warning(f"Temp translated file not found: {temp_path}")
             
-            srt_filename = f"instant_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
-            srt_path = os.path.join(app.config['SUBTITLE_FOLDER'], srt_filename)
+            if not video_file or not subtitle_text:
+                logger.error(f"Merge error: video_file={video_file}, subtitle_text={'exists' if subtitle_text else 'missing'}")
+                logger.error(f"Data received: {json.dumps({k: str(v)[:100] if isinstance(v, str) else v for k, v in data.items()}, ensure_ascii=False)}")
+                return jsonify({
+                    'success': False,
+                    'message': 'ملف الفيديو أو النص غير موجود',
+                    'debug': {
+                        'has_video_file': bool(video_file),
+                        'has_subtitle_text': bool(subtitle_text),
+                        'video_file': video_file if video_file else None,
+                        'received_keys': list(data.keys()),
+                        'temp_video_file': data.get('temp_video_file'),
+                        'temp_translated_file': data.get('temp_translated_file')
+                    }
+                }), 400
             
-            with open(srt_path, 'w', encoding='utf-8') as f:
-                f.write(srt_content)
+            # التأكد من أن ملف الفيديو موجود
+            if not os.path.exists(video_file):
+                # البحث في مجلد التحميل
+                download_folder = Path(app.config['DOWNLOAD_FOLDER'])
+                basename = os.path.basename(video_file)
+                possible_paths = [
+                    download_folder / basename,
+                    Path(video_file)
+                ]
+                
+                for path in possible_paths:
+                    if path.exists():
+                        video_file = str(path)
+                        break
+                else:
+                    return jsonify({
+                        'success': False,
+                        'message': f'ملف الفيديو غير موجود: {video_file}'
+                    }), 400
             
-            # استخراج الإعدادات من data مباشرة إذا لم تكن في settings
-            font_size = int(data.get('font_size') or settings.get('font_size', 22))
-            font_color = data.get('font_color') or settings.get('font_color', '#FFFFFF')
-            bg_color = data.get('bg_color') or settings.get('bg_color', '#000000')
-            bg_opacity = int(data.get('bg_opacity') or settings.get('bg_opacity', 128))
-            position = data.get('position') or settings.get('position', 'bottom')
-            font_name = data.get('font_name') or settings.get('font_name', 'Arial')
-            vertical_offset = int(data.get('vertical_offset') or settings.get('vertical_offset', 0))
-            
-            # التأكد من أن font_color و bg_color بدون #
-            font_color_clean = font_color.replace('#', '') if font_color else 'FFFFFF'
-            bg_color_clean = bg_color.replace('#', '') if bg_color else '000000'
-            
-            ass_content = SubtitleProcessor.create_ass_subtitle(
-                srt_content,
-                font_size=font_size,
-                font_color=font_color_clean,
-                bg_color=bg_color_clean,
-                bg_opacity=bg_opacity,
-                position=position,
-                font_name=font_name,
-                vertical_offset=vertical_offset
-            )
-            
-            ass_path = srt_path.replace('.srt', '.ass')
-            with open(ass_path, 'w', encoding='utf-8') as f:
-                f.write(ass_content)
-            
-            # التأكد من أن الملف تم إنشاؤه بنجاح
-            if not os.path.exists(ass_path):
-                logger.error(f"Failed to create ASS file: {ass_path}")
-                return jsonify({'success': False, 'message': 'فشل إنشاء ملف الترجمة'}), 500
-            
-            logger.info(f"ASS file created successfully: {ass_path}")
-            logger.info(f"ASS file size: {os.path.getsize(ass_path)} bytes")
-            
-            output_filename = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-            output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
-            
-            subtitle_settings = {
-                'font_name': font_name,
-                'font_size': font_size,
-                'font_color': font_color,
-                'bg_color': bg_color,
-                'bg_opacity': bg_opacity,
-                'position': position,
-                'vertical_offset': vertical_offset
+            settings = {
+                'fontSize': data.get('fontSize', data.get('font_size', 24)),
+                'fontColor': data.get('fontColor', data.get('font_color', '#FFFFFF')),
+                'bgColor': data.get('bgColor', data.get('bg_color', '#000000')),
+                'bgOpacity': data.get('bgOpacity', data.get('bg_opacity', 180)),
+                'position': data.get('position', 'bottom'),
+                'fontFamily': data.get('fontFamily', data.get('font_name', 'Arial'))
             }
             
-            # التأكد من أن ملف ASS موجود قبل الدمج
-            if not os.path.exists(ass_path):
-                logger.error(f"ASS file not found: {ass_path}")
-                return jsonify({'success': False, 'message': f'ملف الترجمة غير موجود: {ass_path}'}), 500
-            
-            logger.info(f"Merging video: {video_file}")
-            logger.info(f"Using ASS file: {ass_path}")
-            logger.info(f"ASS file exists: {os.path.exists(ass_path)}")
-            
-            result = VideoProcessor.merge_subtitles(
-                video_file,
-                ass_path,
-                output_path,
-                quality=quality,
-                subtitle_settings=subtitle_settings
-            )
-            
-            if result['success']:
-                # تنظيف الملفات المؤقتة
-                try:
-                    temp_files = [
-                        data.get('temp_video_file'),
-                        data.get('temp_audio_file'),
-                        data.get('temp_transcript_file'),
-                        data.get('temp_translated_file')
-                    ]
-                    for temp_file in temp_files:
-                        if temp_file:
-                            temp_path = os.path.join(app.config['DOWNLOAD_FOLDER'], temp_file)
-                            if os.path.exists(temp_path):
-                                os.remove(temp_path)
-                except:
-                    pass
+            # إنشاء SRT من النص المترجم
+            # إذا كان النص ليس بصيغة SRT، نحوله إلى SRT
+            if not subtitle_text.strip().startswith('1\n') and not subtitle_text.strip().startswith('WEBVTT'):
+                # محاولة استخدام segments من transcript إذا كانت متوفرة
+                transcript_data = None
+                if data.get('temp_transcript_file'):
+                    temp_transcript_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_transcript_file']
+                    if temp_transcript_path.exists():
+                        try:
+                            with open(temp_transcript_path, 'r', encoding='utf-8') as f:
+                                transcript_data = json.load(f)
+                        except:
+                            pass
                 
+                if transcript_data and transcript_data.get('segments'):
+                    # استخدام segments من Whisper مع النص المترجم
+                    segments = transcript_data['segments']
+                    translated_segments = subtitle_text.split('\n')
+                    
+                    srt_lines = []
+                    for i, seg in enumerate(segments):
+                        if i < len(translated_segments) and translated_segments[i].strip():
+                            start_str = SubtitleProcessor._format_time(seg.get('start', i * 3))
+                            end_str = SubtitleProcessor._format_time(seg.get('end', (i + 1) * 3))
+                            
+                            srt_lines.append(f"{i + 1}")
+                            srt_lines.append(f"{start_str} --> {end_str}")
+                            srt_lines.append(translated_segments[i].strip())
+                            srt_lines.append("")
+                    
+                    if srt_lines:
+                        subtitle_text = '\n'.join(srt_lines)
+                    else:
+                        # Fallback: تحويل النص العادي إلى SRT بسيط
+                        segments = subtitle_text.split('\n')
+                        srt_lines = []
+                        for i, line in enumerate(segments, 1):
+                            if line.strip():
+                                start_time = (i - 1) * 3
+                                end_time = i * 3
+                                start_str = SubtitleProcessor._format_time(start_time)
+                                end_str = SubtitleProcessor._format_time(end_time)
+                                
+                                srt_lines.append(f"{i}")
+                                srt_lines.append(f"{start_str} --> {end_str}")
+                                srt_lines.append(line.strip())
+                                srt_lines.append("")
+                        
+                        subtitle_text = '\n'.join(srt_lines)
+                else:
+                    # Fallback: تحويل النص العادي إلى SRT بسيط
+                    segments = subtitle_text.split('\n')
+                    srt_lines = []
+                    for i, line in enumerate(segments, 1):
+                        if line.strip():
+                            start_time = (i - 1) * 3
+                            end_time = i * 3
+                            start_str = SubtitleProcessor._format_time(start_time)
+                            end_str = SubtitleProcessor._format_time(end_time)
+                            
+                            srt_lines.append(f"{i}")
+                            srt_lines.append(f"{start_str} --> {end_str}")
+                            srt_lines.append(line.strip())
+                            srt_lines.append("")
+                    
+                    subtitle_text = '\n'.join(srt_lines)
+            
+            # إنشاء SRT
+            srt_path = Path(app.config['SUBTITLE_FOLDER']) / f"subtitle_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
+            with open(srt_path, 'w', encoding='utf-8') as f:
+                f.write(subtitle_text)
+            
+            # دمج
+            output_file = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+            output_path = Path(app.config['OUTPUT_FOLDER']) / output_file
+            
+            logger.info(f"Merging subtitles: video={video_file}, srt={srt_path}, output={output_path}")
+            
+            success = VideoProcessor.merge_subtitles(str(video_file), str(srt_path), str(output_path), settings)
+            
+            if success:
                 return jsonify({
                     'success': True,
-                    'message': 'تمت الترجمة الفورية بنجاح!',
-                    'output_file': output_filename,
-                    'download_url': f'/download/{output_filename}'
+                    'download_url': f'/download/{output_file}'
                 })
             else:
-                return jsonify({'success': False, 'message': result['message']}), 500
+                return jsonify({
+                    'success': False,
+                    'message': 'فشل دمج الترجمة'
+                }), 500
         
-        else:
-            return jsonify({'success': False, 'message': f'خطوة غير صحيحة: {step}'}), 400
+        return jsonify({'success': False, 'message': 'خطوة غير صحيحة'})
     
     except Exception as e:
-        logger.error(f"Instant translate error: {e}")
+        logger.error(f"API error: {e}")
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/get-qualities', methods=['POST'])
+def api_get_qualities():
+    """الحصول على الجودات المتاحة للفيديو"""
+    try:
+        data = request.json
+        url = data.get('url')
+        
+        if not url:
+            return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
+        
+        result = downloader.get_available_formats(url)
+        
+        if result.get('success'):
+            formats_data = result.get('formats', {})
+            presets = result.get('presets', [])
+            
+            return jsonify({
+                'success': True,
+                'formats': {
+                    'video_audio': formats_data.get('video_audio', [])[:10],
+                    'video_only': formats_data.get('video_only', [])[:10],
+                    'audio_only': formats_data.get('audio_only', [])[:5],
+                    'all_heights': formats_data.get('all_heights', []),
+                    'max_height': formats_data.get('max_height', 0),
+                    'presets': presets
+                },
+                'info': result.get('info', {}),
+                'platform': result.get('platform', 'unknown')
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': result.get('error', 'فشل الحصول على التنسيقات')
+            }), 500
+    
+    except Exception as e:
+        logger.error(f"Get qualities error: {e}")
+        return jsonify({
+            'success': False, 
+            'message': f'خطأ في فحص الجودات: {str(e)}'
+        }), 500
+
+
+@app.route('/api/media/analyze', methods=['POST'])
+def api_analyze_url():
+    """تحليل الرابط والحصول على التنسيقات المتاحة"""
+    data = request.json
+    url = data.get('url', '')
+    
+    if not url:
+        return jsonify({'success': False, 'error': 'No URL provided'}), 400
+    
+    result = downloader.get_available_formats(url)
+    return jsonify(result)
+
+
+@app.route('/api/media/download', methods=['POST'])
+def api_start_media_download():
+    """بدء التحميل مع تنسيق محدد"""
+    data = request.json
+    url = data.get('url', '')
+    format_command = data.get('format', data.get('quality', 'best'))
+    is_audio = data.get('audio_only', False)
+    
+    if not url:
+        return jsonify({'success': False, 'error': 'No URL provided'}), 400
+    
+    download_id = secrets.token_hex(8)
+    
+    thread = threading.Thread(
+        target=downloader.download_with_format,
+        args=(url, format_command, download_id, is_audio)
+    )
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({'success': True, 'download_id': download_id})
+
+
+@app.route('/api/media/progress/<download_id>')
+def api_get_download_progress(download_id):
+    """الحصول على حالة التحميل"""
+    progress = download_progress.get(download_id, {
+        'status': 'unknown',
+        'percent': '0%'
+    })
+    return jsonify(progress)
 
 
 @app.route('/api/download', methods=['POST'])
@@ -1725,11 +1510,122 @@ def api_download():
         if not url:
             return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
         
-        result = downloader.download(url, quality)
-        return jsonify(result)
+        download_id = secrets.token_hex(8)
+        
+        # تحديد format command
+        if quality == 'best':
+            format_cmd = 'bestvideo+bestaudio/best'
+        elif quality == '720p' or quality == 'medium':
+            format_cmd = 'bestvideo[height<=720]+bestaudio/best[height<=720]'
+        elif quality == '480p' or quality == 'low':
+            format_cmd = 'bestvideo[height<=480]+bestaudio/best[height<=480]'
+        elif quality == '1080p':
+            format_cmd = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]'
+        elif quality == '4k' or quality == '2160p':
+            format_cmd = 'bestvideo[height<=2160]+bestaudio/best[height<=2160]'
+        elif quality == 'audio':
+            format_cmd = 'audio'
+        else:
+            format_cmd = quality
+        
+        is_audio = (quality == 'audio')
+        
+        thread = threading.Thread(
+            target=downloader.download_with_format,
+            args=(url, format_cmd, download_id, is_audio)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        # الانتظار حتى يكتمل التحميل
+        max_wait = 120
+        waited = 0
+        
+        while waited < max_wait:
+            progress = download_progress.get(download_id, {})
+            
+            if progress.get('status') == 'completed':
+                # البحث عن الملف المحمّل
+                download_folder = Path(app.config['DOWNLOAD_FOLDER'])
+                video_files = []
+                for file in download_folder.iterdir():
+                    if file.is_file():
+                        ext = file.suffix.lower()
+                        if ext in ['.mp4', '.webm', '.mkv', '.mp3', '.m4a', '.mov', '.avi', '.flv']:
+                            video_files.append((file, file.stat().st_mtime))
+                
+                if video_files:
+                    video_files.sort(key=lambda x: x[1], reverse=True)
+                    downloaded_file = str(video_files[0][0])
+                    
+                    return jsonify({
+                        'success': True,
+                        'file': downloaded_file,
+                        'message': 'تم التحميل بنجاح'
+                    })
+            
+            elif progress.get('status') == 'error':
+                return jsonify({
+                    'success': False,
+                    'message': progress.get('message', 'فشل التحميل')
+                }), 400
+            
+            time.sleep(2)
+            waited += 2
+        
+        return jsonify({
+            'success': False,
+            'message': 'انتهت مهلة التحميل'
+        }), 408
     
     except Exception as e:
         logger.error(f"Download API error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/download/<path:filename>')
+def download_file(filename):
+    """تحميل الملفات"""
+    folders = [
+        app.config['OUTPUT_FOLDER'],
+        app.config['DOWNLOAD_FOLDER'],
+        app.config['SUBTITLE_FOLDER']
+    ]
+    
+    for folder in folders:
+        filepath = os.path.join(folder, filename)
+        if os.path.exists(filepath):
+            return send_file(filepath, as_attachment=True)
+    
+    return "File not found", 404
+
+
+@app.route('/api/storage-info', methods=['GET'])
+def api_storage_info():
+    """معلومات التخزين"""
+    try:
+        folders = {
+            'downloads': app.config['DOWNLOAD_FOLDER'],
+            'outputs': app.config['OUTPUT_FOLDER'],
+            'subtitles': app.config['SUBTITLE_FOLDER']
+        }
+        
+        info = {}
+        for name, folder in folders.items():
+            folder_path = Path(folder)
+            if folder_path.exists():
+                total_size = sum(f.stat().st_size for f in folder_path.rglob('*') if f.is_file())
+                file_count = len(list(folder_path.rglob('*')))
+                info[name] = {
+                    'size': total_size,
+                    'size_mb': round(total_size / (1024 * 1024), 2),
+                    'files': file_count
+                }
+            else:
+                info[name] = {'size': 0, 'size_mb': 0, 'files': 0}
+        
+        return jsonify({'success': True, 'folders': info})
+    except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
@@ -1737,717 +1633,145 @@ def api_download():
 def api_get_video_thumbnail():
     """استخراج صورة مصغرة من الفيديو"""
     try:
-        data = request.json
-        video_file = data.get('video_file') or session.get('video_file')
+        data = request.json or {}
+        video_file = data.get('video_file')
         
-        if video_file and not os.path.isabs(video_file):
-            normalized = video_file.replace('downloads/', '').replace('downloads\\', '')
-            possible_paths = [
-                os.path.join(app.config['DOWNLOAD_FOLDER'], normalized),
-                os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file)),
-                video_file,
-                normalized
-            ]
-            for path in possible_paths:
-                abs_path = os.path.abspath(path)
-                if os.path.exists(abs_path):
-                    video_file = abs_path
-                    break
+        logger.info(f"Thumbnail request: video_file={video_file}")
         
-        if not video_file or not os.path.exists(video_file):
+        if not video_file:
+            logger.warning("No video_file provided in thumbnail request")
             return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
         
-        if not VideoProcessor.check_ffmpeg():
-            return jsonify({'success': False, 'message': 'ffmpeg غير متوفر'}), 503
+        # البحث عن الملف
+        if not os.path.exists(video_file):
+            download_folder = Path(app.config['DOWNLOAD_FOLDER'])
+            basename = os.path.basename(video_file)
+            possible_paths = [
+                download_folder / basename,
+                Path(video_file),
+                download_folder / video_file.replace('downloads/', '').replace('downloads\\', '')
+            ]
+            
+            logger.info(f"Video file not found at {video_file}, trying paths: {possible_paths}")
+            
+            found = False
+            for path in possible_paths:
+                if path.exists():
+                    video_file = str(path)
+                    found = True
+                    logger.info(f"Found video file at: {video_file}")
+                    break
+            
+            if not found:
+                logger.error(f"Video file not found in any location: {video_file}")
+                return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 404
         
-        dimensions = VideoProcessor.get_video_dimensions(video_file)
-        
-        thumbnail_filename = f"thumb_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-        thumbnail_path = os.path.join(app.config['OUTPUT_FOLDER'], thumbnail_filename)
+        # استخراج صورة مصغرة باستخدام ffmpeg
+        thumbnail_path = Path(app.config['OUTPUT_FOLDER']) / f"thumb_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
         
         cmd = [
             'ffmpeg',
             '-i', video_file,
             '-ss', '00:00:01',
             '-vframes', '1',
-            '-vf', 'scale=640:-1',
-            '-threads', '0',
+            '-q:v', '2',
             '-y',
-            thumbnail_path
+            str(thumbnail_path)
         ]
         
-        process = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, timeout=10)
         
-        if process.returncode == 0 and os.path.exists(thumbnail_path):
+        if result.returncode == 0 and thumbnail_path.exists():
             return jsonify({
                 'success': True,
-                'thumbnail_url': f'/download/{thumbnail_filename}',
-                'thumbnail_path': thumbnail_path,
-                'dimensions': dimensions
+                'thumbnail_url': f'/download/{thumbnail_path.name}'
             })
         else:
-            return jsonify({'success': False, 'message': 'فشل استخراج الصورة المصغرة'}), 500
-    
+            # إذا فشل، استخدم صورة افتراضية
+            return jsonify({
+                'success': False,
+                'message': 'فشل استخراج الصورة المصغرة'
+            }), 500
+            
     except Exception as e:
-        logger.error(f"Thumbnail extraction error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/transcribe-from-url', methods=['POST'])
-def api_transcribe_from_url():
-    """تحويل الفيديو من رابط إلى نص"""
-    if not WHISPER_AVAILABLE and not FASTER_WHISPER_AVAILABLE:
-        return jsonify({'success': False, 'message': 'لا توجد مكتبة متاحة لتحويل الصوت إلى نص'}), 503
-    
-    try:
-        data = request.json
-        url = data.get('url')
-        language = data.get('language', 'auto')
-        model_size = data.get('model', 'base')
-        quality = data.get('quality', '720p')
-        
-        if not url:
-            return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
-        
-        # تحميل الفيديو أولاً
-        download_result = downloader.download(url, quality)
-        
-        if not download_result['success']:
-            return jsonify({'success': False, 'message': download_result['message']}), 400
-        
-        video_file = download_result['file']
-        if not os.path.isabs(video_file):
-            video_file = os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file))
-        
-        if not os.path.exists(video_file):
-            return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
-        
-        # استخراج الصوت
-        audio_file = video_file.rsplit('.', 1)[0] + '_audio.wav'
-        
-        cmd = [
-            'ffmpeg',
-            '-i', video_file,
-            '-vn',
-            '-acodec', 'pcm_s16le',
-            '-ar', '16000',
-            '-ac', '1',
-            '-threads', '0',
-            '-y',
-            audio_file
-        ]
-        
-        try:
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
-        except subprocess.CalledProcessError as e:
-            logger.error(f"FFmpeg error: {e.stderr}")
-            return jsonify({'success': False, 'message': f'خطأ في استخراج الصوت: {e.stderr}'}), 500
-        except subprocess.TimeoutExpired:
-            return jsonify({'success': False, 'message': 'انتهت مهلة استخراج الصوت'}), 500
-        
-        # تحويل الصوت إلى نص
-        result = transcribe_audio(audio_file, model_size, language, use_faster=True)
-        
-        # إنشاء ملف SRT
-        srt_content = SubtitleProcessor.create_srt(
-            result['text'],
-            duration=result.get('duration'),
-            segments=result.get('segments', [])
-        )
-        
-        srt_filename = f"{os.path.splitext(os.path.basename(video_file))[0]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
-        srt_path = os.path.join(app.config['SUBTITLE_FOLDER'], srt_filename)
-        
-        with open(srt_path, 'w', encoding='utf-8') as f:
-            f.write(srt_content)
-        
-        # تنظيف ملف الصوت المؤقت
-        try:
-            if os.path.exists(audio_file):
-                os.remove(audio_file)
-        except:
-            pass
-        
-        return jsonify({
-            'success': True,
-            'text': result['text'],
-            'language': result.get('language', language),
-            'srt_file': srt_filename,
-            'segments': result.get('segments', [])
-        })
-    
-    except Exception as e:
-        logger.error(f"Transcribe from URL error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/transcribe', methods=['POST'])
-def api_transcribe():
-    """تحويل الصوت/الفيديو إلى نص"""
-    if not WHISPER_AVAILABLE and not FASTER_WHISPER_AVAILABLE:
-        return jsonify({'success': False, 'message': 'لا توجد مكتبة متاحة لتحويل الصوت إلى نص'}), 503
-    
-    try:
-        if 'file' not in request.files:
-            return jsonify({'success': False, 'message': 'لم يتم رفع ملف'}), 400
-        
-        file = request.files['file']
-        language = request.form.get('language', 'auto')
-        
-        if file.filename == '':
-            return jsonify({'success': False, 'message': 'لم يتم اختيار ملف'}), 400
-        
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
-        
-        model_size = request.form.get('model', 'base')
-        
-        # استخدام الدالة المساعدة التي تستخدم Faster Whisper تلقائياً
-        result = transcribe_audio(filepath, model_size, language, use_faster=True)
-        
-        # إنشاء ملف SRT مع segments
-        srt_content = SubtitleProcessor.create_srt(
-            result['text'],
-            duration=result.get('duration'),
-            segments=result.get('segments', [])
-        )
-        srt_filename = f"{os.path.splitext(filename)[0]}.srt"
-        srt_path = os.path.join(app.config['SUBTITLE_FOLDER'], srt_filename)
-        
-        with open(srt_path, 'w', encoding='utf-8') as f:
-            f.write(srt_content)
-        
-        os.remove(filepath)
-        
-        return jsonify({
-            'success': True,
-            'text': result['text'],
-            'language': result.get('language', language),
-            'srt_file': srt_filename,
-            'segments': result.get('segments', [])
-        })
-    
-    except Exception as e:
-        logger.error(f"Transcribe error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/translate', methods=['POST'])
-def api_translate():
-    """ترجمة النص"""
-    if not TRANSLATOR_AVAILABLE:
-        return jsonify({'success': False, 'message': 'المترجم غير متوفر'}), 503
-    
-    try:
-        data = request.json
-        text = data.get('text')
-        target_lang = data.get('target_lang', 'ar')
-        source_lang = data.get('source_lang', 'auto')
-        
-        if not text:
-            return jsonify({'success': False, 'message': 'لا يوجد نص للترجمة'}), 400
-        
-        translator = GoogleTranslator(source=source_lang, target=target_lang)
-        translated = translator.translate(text)
-        
-        return jsonify({
-            'success': True,
-            'translated_text': translated,
-            'source_lang': source_lang,
-            'target_lang': target_lang
-        })
-    
-    except Exception as e:
-        logger.error(f"Translation error: {e}")
+        logger.error(f"Thumbnail error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
 @app.route('/api/merge-subtitle', methods=['POST'])
 def api_merge_subtitle():
-    """دمج الترجمة مع الفيديو"""
+    """دمج الترجمة مع الفيديو (من تبويب محرر الترجمة)"""
     try:
-        if 'video' not in request.files or 'subtitle' not in request.files:
-            return jsonify({'success': False, 'message': 'الرجاء رفع الفيديو والترجمة'}), 400
+        video_file = request.files.get('video')
+        subtitle_file = request.files.get('subtitle')
         
-        video_file = request.files['video']
-        subtitle_file = request.files['subtitle']
+        if not video_file or not subtitle_file:
+            return jsonify({
+                'success': False,
+                'message': 'يرجى رفع الفيديو وملف الترجمة'
+            }), 400
         
-        settings = {
-            'font_size': int(request.form.get('font_size', 20)),
-            'font_color': request.form.get('font_color', '#FFFFFF'),
-            'bg_color': request.form.get('bg_color', '#000000'),
-            'bg_opacity': int(request.form.get('bg_opacity', 128)),
-            'position': request.form.get('position', 'bottom'),
-            'font_name': request.form.get('font_name', 'Arial'),
-            'quality': request.form.get('quality', 'medium')
-        }
-        
+        # حفظ الملفات
         video_filename = secure_filename(video_file.filename)
         subtitle_filename = secure_filename(subtitle_file.filename)
         
-        video_path = os.path.join(app.config['UPLOAD_FOLDER'], video_filename)
-        subtitle_path = os.path.join(app.config['SUBTITLE_FOLDER'], subtitle_filename)
+        temp_video_path = Path(app.config['UPLOAD_FOLDER']) / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{video_filename}"
+        temp_subtitle_path = Path(app.config['UPLOAD_FOLDER']) / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{subtitle_filename}"
         
-        video_file.save(video_path)
-        subtitle_file.save(subtitle_path)
+        video_file.save(str(temp_video_path))
+        subtitle_file.save(str(temp_subtitle_path))
         
-        if subtitle_filename.endswith('.srt'):
-            with open(subtitle_path, 'r', encoding='utf-8') as f:
-                srt_content = f.read()
-            
-            ass_content = SubtitleProcessor.create_ass_subtitle(
-                srt_content,
-                font_size=settings['font_size'],
-                font_color=settings['font_color'],
-                bg_color=settings['bg_color'],
-                bg_opacity=settings['bg_opacity'],
-                position=settings['position'],
-                font_name=settings['font_name']
-            )
-            
-            ass_path = subtitle_path.replace('.srt', '.ass')
-            with open(ass_path, 'w', encoding='utf-8') as f:
-                f.write(ass_content)
-            
-            subtitle_path = ass_path
+        # قراءة إعدادات الترجمة
+        settings = {
+            'fontSize': int(request.form.get('fontSize', request.form.get('font_size', 24))),
+            'fontColor': request.form.get('fontColor', request.form.get('font_color', '#FFFFFF')),
+            'bgColor': request.form.get('bgColor', request.form.get('bg_color', '#000000')),
+            'bgOpacity': int(request.form.get('bgOpacity', request.form.get('bg_opacity', 180))),
+            'position': request.form.get('position', 'bottom'),
+            'fontFamily': request.form.get('fontFamily', request.form.get('font_name', 'Arial'))
+        }
         
-        output_filename = f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-        output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
+        # دمج
+        output_file = f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        output_path = Path(app.config['OUTPUT_FOLDER']) / output_file
         
-        result = VideoProcessor.merge_subtitles(
-            video_path,
-            subtitle_path,
-            output_path,
-            quality=settings['quality'],
-            subtitle_settings=settings
+        success = VideoProcessor.merge_subtitles(
+            str(temp_video_path),
+            str(temp_subtitle_path),
+            str(output_path),
+            settings
         )
         
-        os.remove(video_path)
+        # حذف الملفات المؤقتة
+        try:
+            temp_video_path.unlink()
+            temp_subtitle_path.unlink()
+        except:
+            pass
         
-        if result['success']:
+        if success:
             return jsonify({
                 'success': True,
-                'message': result['message'],
-                'output_file': output_filename,
-                'download_url': f'/download/{output_filename}'
+                'download_url': f'/download/{output_file}'
             })
         else:
-            return jsonify(result), 500
-    
+            return jsonify({
+                'success': False,
+                'message': 'فشل دمج الترجمة'
+            }), 500
+            
     except Exception as e:
         logger.error(f"Merge subtitle error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/storage-info', methods=['GET'])
-def api_storage_info():
-    """الحصول على معلومات الحجم المستخدم"""
-    try:
-        total_size = 0
-        
-        folders = [
-            app.config['DOWNLOAD_FOLDER'],
-            app.config['UPLOAD_FOLDER'],
-            app.config['OUTPUT_FOLDER'],
-            app.config['SUBTITLE_FOLDER']
-        ]
-        
-        for folder in folders:
-            if os.path.exists(folder):
-                for root, dirs, files in os.walk(folder):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        try:
-                            total_size += os.path.getsize(file_path)
-                        except:
-                            pass
-        
-        size_mb = total_size / (1024 * 1024)
-        
-        return jsonify({
-            'success': True,
-            'size_bytes': total_size,
-            'size_mb': round(size_mb, 2),
-            'size_gb': round(size_mb / 1024, 2)
-        })
-    except Exception as e:
-        logger.error(f"Storage info error: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/get-qualities', methods=['POST'])
-def api_get_qualities():
-    """الحصول على الجودات المتاحة للفيديو - نسخة محسّنة واحترافية"""
-    try:
-        data = request.json
-        url = data.get('url')
-        
-        if not url:
-            return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
-        
-        platform = VideoDownloader().detect_platform(url)
-        logger.info(f"Platform detected: {platform} for URL: {url}")
-        
-        try:
-            # إعدادات محسّنة لكل منصة
-            ydl_opts = {
-                'quiet': False,
-                'no_warnings': False,
-                'extract_flat': False,
-                'socket_timeout': 30,
-                'nocheckcertificate': True,
-                'geo_bypass': True,
-            }
-            
-            # إعدادات خاصة بكل منصة
-            if platform == 'tiktok':
-                ydl_opts['http_headers'] = {
-                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
-                    'Referer': 'https://www.tiktok.com/',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5',
-                    'Accept-Encoding': 'gzip, deflate',
-                }
-                ydl_opts['extractor_args'] = {
-                    'tiktok': {
-                        'webpage_download': True,
-                    }
-                }
-            elif platform == 'youtube':
-                # استخدام web client فقط لتجنب مشاكل PO Token
-                ydl_opts['extractor_args'] = {
-                    'youtube': {
-                        'player_client': ['web'],  # استخدام web فقط
-                    }
-                }
-                # إضافة إعدادات للتعامل مع SABR streaming
-                ydl_opts['format_sort'] = ['res', 'ext:mp4:m4a', 'codec', 'size']
-            elif platform == 'instagram':
-                ydl_opts['http_headers'] = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                
-                if not info:
-                    raise Exception("لم يتم العثور على معلومات الفيديو")
-                
-                formats = info.get('formats', [])
-                logger.info(f"Found {len(formats)} formats for {platform}")
-                
-                qualities = []
-                seen_qualities = {}
-                
-                # معالجة شاملة لجميع التنسيقات
-                video_formats = []
-                audio_formats = []
-                
-                for fmt in formats:
-                    format_id = fmt.get('format_id', '')
-                    height = fmt.get('height')
-                    width = fmt.get('width')
-                    vcodec = fmt.get('vcodec', 'none')
-                    acodec = fmt.get('acodec', 'none')
-                    ext = fmt.get('ext', 'mp4')
-                    filesize = fmt.get('filesize') or fmt.get('filesize_approx', 0)
-                    fps = fmt.get('fps', 0)
-                    tbr = fmt.get('tbr', 0)  # معدل البت
-                    vbr = fmt.get('vbr', 0)
-                    abr = fmt.get('abr', 0)
-                    
-                    # فصل الفيديو والصوت
-                    if vcodec != 'none' and acodec != 'none':
-                        video_formats.append({
-                            'format_id': format_id,
-                            'height': height,
-                            'width': width,
-                            'ext': ext,
-                            'vcodec': vcodec,
-                            'acodec': acodec,
-                            'filesize': filesize,
-                            'fps': fps,
-                            'tbr': tbr,
-                            'vbr': vbr,
-                            'abr': abr,
-                            'format_note': fmt.get('format_note', ''),
-                            'quality': fmt.get('quality', 0),
-                        })
-                    
-                    if acodec != 'none' and vcodec == 'none':
-                        audio_formats.append({
-                            'format_id': format_id,
-                            'ext': ext,
-                            'acodec': acodec,
-                            'filesize': filesize,
-                            'abr': abr,
-                        })
-                
-                # تجميع جودات الفيديو
-                for fmt in sorted(video_formats, key=lambda x: (x.get('height') or 0, x.get('tbr') or 0), reverse=True):
-                    height = fmt.get('height')
-                    if not height:
-                        continue
-                    
-                    quality_key = f"{height}p"
-                    
-                    # تجنب التكرار - نأخذ أفضل تنسيق لكل جودة
-                    if quality_key not in seen_qualities:
-                        filesize_mb = (fmt.get('filesize') or 0) / (1024 * 1024)
-                        bitrate = fmt.get('tbr') or fmt.get('vbr') or 0
-                        
-                        # تحديد التسمية بناءً على الجودة
-                        if height >= 2160:
-                            label = f'4K ({height}p)'
-                        elif height >= 1440:
-                            label = f'2K ({height}p)'
-                        elif height >= 1080:
-                            label = f'Full HD ({height}p)'
-                        elif height >= 720:
-                            label = f'HD ({height}p)'
-                        elif height >= 480:
-                            label = f'SD ({height}p)'
-                        else:
-                            label = f'{height}p'
-                        
-                        # إضافة معلومات إضافية
-                        info_text = []
-                        if filesize_mb > 0:
-                            info_text.append(f"{filesize_mb:.1f} MB")
-                        if bitrate > 0:
-                            info_text.append(f"{int(bitrate)} kbps")
-                        if fmt.get('fps', 0) > 0:
-                            info_text.append(f"{int(fmt['fps'])} fps")
-                        
-                        qualities.append({
-                            'id': quality_key.lower(),
-                            'label': label,
-                            'ext': fmt.get('ext', 'mp4'),
-                            'height': height,
-                            'width': fmt.get('width'),
-                            'format_id': fmt.get('format_id'),
-                            'filesize_mb': round(filesize_mb, 2) if filesize_mb > 0 else None,
-                            'bitrate': int(bitrate) if bitrate > 0 else None,
-                            'fps': int(fmt.get('fps', 0)) if fmt.get('fps', 0) > 0 else None,
-                            'info': ' • '.join(info_text) if info_text else None,
-                            'vcodec': fmt.get('vcodec', ''),
-                        })
-                        seen_qualities[quality_key] = True
-                
-                # إضافة أفضل جودة صوت
-                if audio_formats:
-                    best_audio = max(audio_formats, key=lambda x: x.get('abr', 0))
-                    filesize_mb = (best_audio.get('filesize') or 0) / (1024 * 1024)
-                    abr = best_audio.get('abr', 0)
-                    
-                    info_text = []
-                    if filesize_mb > 0:
-                        info_text.append(f"{filesize_mb:.1f} MB")
-                    if abr > 0:
-                        info_text.append(f"{int(abr)} kbps")
-                    
-                    qualities.append({
-                        'id': 'audio',
-                        'label': 'صوت فقط',
-                        'ext': best_audio.get('ext', 'mp3'),
-                        'height': None,
-                        'format_id': best_audio.get('format_id'),
-                        'filesize_mb': round(filesize_mb, 2) if filesize_mb > 0 else None,
-                        'bitrate': int(abr) if abr > 0 else None,
-                        'info': ' • '.join(info_text) if info_text else None,
-                    })
-                
-                # إضافة خيار "أفضل جودة" في البداية
-                if qualities:
-                    qualities.insert(0, {
-                        'id': 'best',
-                        'label': '⭐ أفضل جودة متاحة',
-                        'ext': 'mp4',
-                        'height': None,
-                        'format_id': 'best',
-                        'info': 'سيتم اختيار أفضل جودة تلقائياً'
-                    })
-                else:
-                    # إذا لم يتم العثور على جودات، استخدم الافتراضية
-                    qualities = [
-                        {'id': 'best', 'label': '⭐ أفضل جودة', 'ext': 'mp4', 'info': 'جودة افتراضية'},
-                        {'id': 'medium', 'label': 'HD (720p)', 'ext': 'mp4', 'height': 720, 'info': 'جودة متوسطة'},
-                        {'id': 'low', 'label': 'SD (480p)', 'ext': 'mp4', 'height': 480, 'info': 'جودة منخفضة'},
-                        {'id': 'audio', 'label': 'صوت فقط', 'ext': 'mp3', 'info': 'صوت فقط'}
-                    ]
-                
-                return jsonify({
-                    'success': True,
-                    'qualities': qualities,
-                    'title': info.get('title', 'Unknown'),
-                    'duration': info.get('duration', 0),
-                    'thumbnail': info.get('thumbnail') or info.get('thumbnails', [{}])[0].get('url', '') if info.get('thumbnails') else '',
-                    'view_count': info.get('view_count', 0),
-                    'platform': platform,
-                    'formats_count': len(formats)
-                })
-        
-        except yt_dlp.utils.DownloadError as e:
-            error_msg = str(e)
-            logger.error(f"yt-dlp error: {error_msg}")
-            
-            # محاولة إرجاع جودات افتراضية
-            return jsonify({
-                'success': True,
-                'qualities': [
-                    {'id': 'best', 'label': '⭐ أفضل جودة', 'ext': 'mp4', 'info': 'سيتم المحاولة'},
-                    {'id': 'medium', 'label': 'HD (720p)', 'ext': 'mp4', 'height': 720},
-                    {'id': 'low', 'label': 'SD (480p)', 'ext': 'mp4', 'height': 480},
-                    {'id': 'audio', 'label': 'صوت فقط', 'ext': 'mp3'}
-                ],
-                'message': f'تم استخدام جودات افتراضية. قد تحتاج إلى تحديث yt-dlp: pip install -U yt-dlp'
-            })
-        except Exception as e:
-            logger.error(f"Get qualities error: {e}")
-            logger.error(traceback.format_exc())
-            raise
-    
-    except Exception as e:
-        logger.error(f"Get qualities API error: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False, 
-            'message': f'خطأ في فحص الجودات: {str(e)}',
-            'qualities': [
-                {'id': 'best', 'label': '⭐ أفضل جودة', 'ext': 'mp4'},
-                {'id': 'medium', 'label': 'HD (720p)', 'ext': 'mp4'},
-                {'id': 'low', 'label': 'SD (480p)', 'ext': 'mp4'},
-                {'id': 'audio', 'label': 'صوت فقط', 'ext': 'mp3'}
-            ]
-        }), 500
-
-
-@app.route('/api/cleanup', methods=['POST'])
-@app.route('/api/cleanup-files', methods=['POST'])
-def api_cleanup_files():
-    """حذف الملفات"""
-    try:
-        data = request.json or {}
-        cleanup_type = data.get('type', 'all')
-        
-        deleted_count = 0
-        deleted_size = 0
-        
-        folders_to_clean = []
-        
-        if cleanup_type == 'all':
-            folders_to_clean = [
-                app.config['DOWNLOAD_FOLDER'],
-                app.config['UPLOAD_FOLDER'],
-                app.config['OUTPUT_FOLDER'],
-                app.config['SUBTITLE_FOLDER']
-            ]
-        elif cleanup_type == 'downloads':
-            folders_to_clean = [app.config['DOWNLOAD_FOLDER']]
-        elif cleanup_type == 'uploads':
-            folders_to_clean = [app.config['UPLOAD_FOLDER']]
-        elif cleanup_type == 'outputs':
-            folders_to_clean = [app.config['OUTPUT_FOLDER']]
-        elif cleanup_type == 'subtitles':
-            folders_to_clean = [app.config['SUBTITLE_FOLDER']]
-        
-        for folder in folders_to_clean:
-            if os.path.exists(folder):
-                for root, dirs, files in os.walk(folder):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        try:
-                            file_size = os.path.getsize(file_path)
-                            os.remove(file_path)
-                            deleted_count += 1
-                            deleted_size += file_size
-                        except Exception as e:
-                            logger.warning(f"Could not delete {file_path}: {e}")
-        
-        deleted_mb = deleted_size / (1024 * 1024)
-        
-        return jsonify({
-            'success': True,
-            'deleted_count': deleted_count,
-            'deleted_size_mb': round(deleted_mb, 2)
-        })
-    except Exception as e:
-        logger.error(f"Cleanup error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/download/<path:filename>')
-def download_file(filename):
-    """تحميل الملفات"""
-    # معالجة المسارات المشفرة وإزالة "downloads/" من البداية
-    filename = filename.replace('%2F', '/').replace('%5C', '\\')
-    
-    # إزالة "downloads/" من البداية إذا كان موجوداً
-    if filename.startswith('downloads/'):
-        filename = filename.replace('downloads/', '', 1)
-    if filename.startswith('downloads\\'):
-        filename = filename.replace('downloads\\', '', 1)
-    
-    folders = [
-        app.config['OUTPUT_FOLDER'],
-        app.config['DOWNLOAD_FOLDER'],
-        app.config['SUBTITLE_FOLDER']
-    ]
-    
-    # محاولة البحث في المجلدات
-    for folder in folders:
-        # محاولة بالمسار الكامل
-        filepath = os.path.join(folder, filename)
-        if os.path.exists(filepath):
-            return send_file(filepath, as_attachment=True)
-        
-        # محاولة بالاسم فقط
-        basename = os.path.basename(filename)
-        filepath = os.path.join(folder, basename)
-        if os.path.exists(filepath):
-            return send_file(filepath, as_attachment=True)
-    
-    # البحث في جميع الملفات
-    for folder in folders:
-        if os.path.exists(folder):
-            for root, dirs, files in os.walk(folder):
-                for file in files:
-                    if file == os.path.basename(filename) or file == filename:
-                        return send_file(os.path.join(root, file), as_attachment=True)
-    
-    logger.error(f"File not found: {filename}")
-    return "File not found", 404
-
-
-@app.route('/download/subtitle/<filename>')
-def download_subtitle(filename):
-    """تحميل ملفات الترجمة"""
-    filepath = os.path.join(app.config['SUBTITLE_FOLDER'], filename)
-    if os.path.exists(filepath):
-        return send_file(filepath, as_attachment=True)
-    return "File not found", 404
-
-
-@app.errorhandler(404)
-def not_found_error(error):
-    return jsonify({'error': 'Not found'}), 404
-
-
-@app.errorhandler(500)
-def internal_error(error):
-    logger.error(f"Internal error: {error}")
-    return jsonify({'error': 'Internal server error'}), 500
 
 
 if __name__ == '__main__':
     print("\n" + "="*60)
-    print("🎬 التطبيق المتكامل للترجمة والتحميل v5.0")
+    print("🎬 التطبيق المتكامل للترجمة والتحميل v6.0")
     print("="*60)
     print(f"✅ Whisper: {'متوفر' if WHISPER_AVAILABLE else 'غير متوفر'}")
-    print(f"✅ Faster Whisper: {'متوفر (سيتم استخدامه - أسرع بـ 4-5x)' if FASTER_WHISPER_AVAILABLE else 'غير متوفر'}")
+    print(f"✅ Faster Whisper: {'متوفر' if FASTER_WHISPER_AVAILABLE else 'غير متوفر'}")
     print(f"✅ المترجم: {'متوفر' if TRANSLATOR_AVAILABLE else 'غير متوفر'}")
     print(f"✅ FFmpeg: {'متوفر' if VideoProcessor.check_ffmpeg() else 'غير متوفر'}")
     print("\n🌐 الخادم يعمل على: http://localhost:5000")
