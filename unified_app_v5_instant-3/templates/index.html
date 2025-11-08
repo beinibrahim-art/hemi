@@ -709,6 +709,95 @@
                                 </div>
                             </div>
 
+                            <!-- Subtitle Settings Section -->
+                            <div class="mb-4" id="instantSubtitleSettings" style="display: none;">
+                                <div class="section-divider"></div>
+                                <h4 class="mb-3"><i class="bi bi-palette"></i> إعدادات الترجمة</h4>
+                                
+                                <div class="row">
+                                    <!-- Font Settings -->
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">نوع الخط:</label>
+                                        <div class="font-selector">
+                                            <div class="font-option selected" data-font="Arial" onclick="selectInstantFont('Arial')">
+                                                Arial (عربي)
+                                            </div>
+                                            <div class="font-option" data-font="Tahoma" onclick="selectInstantFont('Tahoma')">
+                                                Tahoma (عربي)
+                                            </div>
+                                            <div class="font-option" data-font="Traditional Arabic" onclick="selectInstantFont('Traditional Arabic')">
+                                                Traditional Arabic
+                                            </div>
+                                        </div>
+                                        
+                                        <label class="form-label mt-3">حجم الخط:</label>
+                                        <div class="slider-wrapper">
+                                            <input type="range" class="form-range custom-range" id="instantFontSize" 
+                                                   min="10" max="50" value="22" onchange="updateInstantPreview()">
+                                            <span class="slider-value" id="instantFontSizeValue">22</span>
+                                        </div>
+                                        
+                                        <label class="form-label mt-3">لون الخط:</label>
+                                        <div class="color-picker-wrapper">
+                                            <input type="color" id="instantFontColor" value="#FFFFFF" onchange="updateInstantPreview()">
+                                            <div class="color-preview" id="instantFontColorPreview" 
+                                                 style="background: #FFFFFF;" onclick="document.getElementById('instantFontColor').click()"></div>
+                                            <input type="text" class="form-control" id="instantFontColorHex" 
+                                                   value="#FFFFFF" onchange="updateInstantColorFromHex()">
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Background Settings -->
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">لون الخلفية:</label>
+                                        <div class="color-picker-wrapper">
+                                            <input type="color" id="instantBgColor" value="#000000" onchange="updateInstantPreview()">
+                                            <div class="color-preview" id="instantBgColorPreview" 
+                                                 style="background: #000000;" onclick="document.getElementById('instantBgColor').click()"></div>
+                                            <input type="text" class="form-control" id="instantBgColorHex" 
+                                                   value="#000000" onchange="updateInstantBgColorFromHex()">
+                                        </div>
+                                        
+                                        <label class="form-label mt-3">شفافية الخلفية:</label>
+                                        <div class="slider-wrapper">
+                                            <input type="range" class="form-range custom-range" id="instantBgOpacity" 
+                                                   min="0" max="255" value="180" onchange="updateInstantPreview()">
+                                            <span class="slider-value" id="instantBgOpacityValue">70%</span>
+                                        </div>
+                                        
+                                        <label class="form-label mt-3">موضع الترجمة:</label>
+                                        <div class="position-selector">
+                                            <div class="position-option" data-position="top" onclick="selectInstantPosition('top')">
+                                                <i class="bi bi-align-top"></i> أعلى
+                                            </div>
+                                            <div class="position-option" data-position="center" onclick="selectInstantPosition('center')">
+                                                <i class="bi bi-align-middle"></i> وسط
+                                            </div>
+                                            <div class="position-option selected" data-position="bottom" onclick="selectInstantPosition('bottom')">
+                                                <i class="bi bi-align-bottom"></i> أسفل
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Preview Section -->
+                                <div class="mt-4">
+                                    <h5 class="mb-3"><i class="bi bi-eye"></i> معاينة الترجمة</h5>
+                                    <div class="preview-section">
+                                        <div class="video-preview">
+                                            <video id="instantVideoPreview" style="width: 100%; height: 100%; display: none;" controls></video>
+                                            <div id="instantNoVideoPreview" style="color: rgba(255,255,255,0.5);">
+                                                <i class="bi bi-film" style="font-size: 3rem;"></i>
+                                                <p>سيتم عرض معاينة الفيديو مع الترجمة هنا</p>
+                                            </div>
+                                            <div class="subtitle-preview" id="instantSubtitlePreview">
+                                                هذا مثال على شكل الترجمة
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
                             <!-- Start Button -->
                             <div class="text-center mb-4">
                                 <button class="btn btn-gradient btn-lg" onclick="startInstantTranslation()" 
@@ -1319,28 +1408,63 @@
                 await updateInstantStep(5, 'active', 'جاري دمج الترجمة مع الفيديو...');
                 updateInstantProgress(85);
                 
+                // Store translated text for preview
+                window.instantTranslatedText = translateResponse.data.translated_text;
+                window.instantVideoFile = downloadResponse.data.file;
+                
+                // Show subtitle settings and preview
+                document.getElementById('instantSubtitleSettings').style.display = 'block';
+                document.getElementById('instantTranscriptText').value = translateResponse.data.translated_text;
+                document.getElementById('instantTranscript').style.display = 'block';
+                
+                // Load video preview if available
+                if (downloadResponse.data.file) {
+                    // Try to load video preview (if file is accessible)
+                    const videoPreview = document.getElementById('instantVideoPreview');
+                    videoPreview.style.display = 'block';
+                    document.getElementById('instantNoVideoPreview').style.display = 'none';
+                    // Note: In production, you'd need to serve the video file
+                }
+                
+                // Update preview with translated text
+                updateInstantPreview();
+                
+                // Show preview button
+                const previewBtn = document.createElement('button');
+                previewBtn.className = 'btn btn-outline-light btn-lg mt-3';
+                previewBtn.innerHTML = '<i class="bi bi-eye"></i> معاينة قبل التصدير';
+                previewBtn.onclick = () => {
+                    // Scroll to preview section
+                    document.getElementById('instantSubtitleSettings').scrollIntoView({ behavior: 'smooth' });
+                };
+                document.getElementById('instantStartBtn').parentElement.appendChild(previewBtn);
+                
+                // Wait for user to review settings, then proceed with merge
+                await updateInstantStep(5, 'active', 'انتظر... راجع الإعدادات واضغط "تصدير"');
+                updateInstantProgress(85, 'راجع إعدادات الترجمة واضغط "تصدير النهائي"');
+                
+                // Show export button
+                const exportBtn = document.createElement('button');
+                exportBtn.className = 'btn btn-success btn-lg mt-3';
+                exportBtn.id = 'instantExportBtn';
+                exportBtn.innerHTML = '<i class="bi bi-download"></i> تصدير النهائي';
+                exportBtn.onclick = async () => {
+                    exportBtn.disabled = true;
+                    await finalizeInstantTranslation(downloadResponse.data.file, translateResponse.data.translated_text);
+                };
+                document.getElementById('instantStartBtn').parentElement.appendChild(exportBtn);
+                
+                return; // Stop here, wait for user to click export
+                
+                // Old merge code (will be called from finalizeInstantTranslation)
                 const mergeResponse = await axios.post('/api/instant-translate', {
                     video_file: downloadResponse.data.file,
                     subtitle_text: translateResponse.data.translated_text,
                     step: 'merge',
-                    settings: {
-                        font_name: document.getElementById('instantFont')?.value || 'Arial',
-                        font_size: document.getElementById('instantFontSize')?.value || 22,
-                        font_color: document.getElementById('instantFontColor')?.value || '#FFFFFF',
-                        position: document.getElementById('instantPosition')?.value || 'bottom'
-                    }
+                    settings: getInstantSubtitleSettings()
                 });
 
-                await updateInstantStep(5, 'completed');
-                updateInstantProgress(100, 'اكتملت الترجمة!');
-
-                // Show result
-                document.getElementById('instantDownloadLink').href = mergeResponse.data.download_url;
-                document.getElementById('instantTranscriptText').value = translateResponse.data.translated_text;
-                document.getElementById('instantTranscript').style.display = 'block';
-                document.getElementById('instantResult').style.display = 'block';
-                
-                showAlert('تمت الترجمة الفورية بنجاح! 🎉', 'success');
+                // This code is now handled in finalizeInstantTranslation
 
             } catch (error) {
                 console.error('Error:', error);
@@ -1386,7 +1510,20 @@
             document.getElementById('instantUrl').value = '';
             document.getElementById('instantProgress').style.display = 'none';
             document.getElementById('instantResult').style.display = 'none';
+            document.getElementById('instantSubtitleSettings').style.display = 'none';
             document.getElementById('instantProgressBar').style.width = '0%';
+            document.getElementById('instantTranscript').style.display = 'none';
+            
+            // Remove export button if exists
+            const exportBtn = document.getElementById('instantExportBtn');
+            if (exportBtn) {
+                exportBtn.remove();
+            }
+            
+            // Reset preview
+            window.instantTranslatedText = null;
+            window.instantVideoFile = null;
+            
             resetInstantSteps();
         }
 
@@ -1398,12 +1535,168 @@
             document.getElementById('instantStatusText').textContent = 'جاري التحضير...';
         }
 
-        // Font size slider
+        // Instant translation subtitle settings functions
+        let instantSelectedFont = 'Arial';
+        let instantSelectedPosition = 'bottom';
+
+        function selectInstantFont(font) {
+            instantSelectedFont = font;
+            document.querySelectorAll('#instantSubtitleSettings .font-option').forEach(option => {
+                option.classList.remove('selected');
+                if (option.dataset.font === font) {
+                    option.classList.add('selected');
+                }
+            });
+            updateInstantPreview();
+        }
+
+        function selectInstantPosition(position) {
+            instantSelectedPosition = position;
+            document.querySelectorAll('#instantSubtitleSettings .position-option').forEach(option => {
+                option.classList.remove('selected');
+                if (option.dataset.position === position) {
+                    option.classList.add('selected');
+                }
+            });
+            updateInstantPreview();
+        }
+
+        function updateInstantPreview() {
+            const preview = document.getElementById('instantSubtitlePreview');
+            if (!preview) return;
+            
+            const fontSize = document.getElementById('instantFontSize').value;
+            const fontColor = document.getElementById('instantFontColor').value;
+            const bgColor = document.getElementById('instantBgColor').value;
+            const bgOpacity = document.getElementById('instantBgOpacity').value;
+            
+            // Update preview text if available
+            if (window.instantTranslatedText) {
+                const previewText = window.instantTranslatedText.substring(0, 50) + '...';
+                preview.textContent = previewText;
+            }
+            
+            preview.style.fontSize = fontSize + 'px';
+            preview.style.color = fontColor;
+            preview.style.fontFamily = instantSelectedFont;
+            
+            // Convert hex to rgba for background
+            const r = parseInt(bgColor.substr(1,2), 16);
+            const g = parseInt(bgColor.substr(3,2), 16);
+            const b = parseInt(bgColor.substr(5,2), 16);
+            const a = bgOpacity / 255;
+            preview.style.backgroundColor = `rgba(${r}, ${g}, ${b}, ${a})`;
+            
+            // Update position
+            if (instantSelectedPosition === 'top') {
+                preview.style.bottom = 'auto';
+                preview.style.top = '50px';
+                preview.style.transform = 'translateX(-50%)';
+            } else if (instantSelectedPosition === 'center') {
+                preview.style.bottom = '50%';
+                preview.style.top = 'auto';
+                preview.style.transform = 'translate(-50%, 50%)';
+            } else {
+                preview.style.bottom = '50px';
+                preview.style.top = 'auto';
+                preview.style.transform = 'translateX(-50%)';
+            }
+            
+            // Update value displays
+            document.getElementById('instantFontSizeValue').textContent = fontSize;
+            const percentage = Math.round((bgOpacity / 255) * 100);
+            document.getElementById('instantBgOpacityValue').textContent = percentage + '%';
+            
+            // Update color previews
+            document.getElementById('instantFontColorPreview').style.background = fontColor;
+            document.getElementById('instantFontColorHex').value = fontColor;
+            document.getElementById('instantBgColorPreview').style.background = bgColor;
+            document.getElementById('instantBgColorHex').value = bgColor;
+        }
+
+        function updateInstantColorFromHex() {
+            const hex = document.getElementById('instantFontColorHex').value;
+            document.getElementById('instantFontColor').value = hex;
+            document.getElementById('instantFontColorPreview').style.background = hex;
+            updateInstantPreview();
+        }
+
+        function updateInstantBgColorFromHex() {
+            const hex = document.getElementById('instantBgColorHex').value;
+            document.getElementById('instantBgColor').value = hex;
+            document.getElementById('instantBgColorPreview').style.background = hex;
+            updateInstantPreview();
+        }
+
+        function getInstantSubtitleSettings() {
+            return {
+                font_name: instantSelectedFont,
+                font_size: parseInt(document.getElementById('instantFontSize').value),
+                font_color: document.getElementById('instantFontColor').value,
+                bg_color: document.getElementById('instantBgColor').value,
+                bg_opacity: parseInt(document.getElementById('instantBgOpacity').value),
+                position: instantSelectedPosition
+            };
+        }
+
+        async function finalizeInstantTranslation(videoFile, translatedText) {
+            try {
+                await updateInstantStep(5, 'active', 'جاري دمج الترجمة مع الفيديو...');
+                updateInstantProgress(90);
+                
+                const mergeResponse = await axios.post('/api/instant-translate', {
+                    video_file: videoFile,
+                    subtitle_text: translatedText,
+                    step: 'merge',
+                    settings: getInstantSubtitleSettings()
+                });
+
+                if (!mergeResponse.data.success) {
+                    throw new Error(mergeResponse.data.message);
+                }
+
+                await updateInstantStep(5, 'completed');
+                updateInstantProgress(100, 'اكتملت الترجمة!');
+
+                // Show result
+                document.getElementById('instantDownloadLink').href = mergeResponse.data.download_url;
+                document.getElementById('instantResult').style.display = 'block';
+                
+                showAlert('تمت الترجمة الفورية بنجاح! 🎉', 'success');
+
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert(error.message || 'حدث خطأ أثناء المعالجة', 'danger');
+            }
+        }
+
+        // Font size slider and color inputs for instant translation
         document.addEventListener('DOMContentLoaded', function() {
             const fontSizeSlider = document.getElementById('instantFontSize');
             if (fontSizeSlider) {
                 fontSizeSlider.addEventListener('input', function() {
-                    document.getElementById('instantFontSizeValue').textContent = this.value;
+                    updateInstantPreview();
+                });
+            }
+            
+            const bgOpacitySlider = document.getElementById('instantBgOpacity');
+            if (bgOpacitySlider) {
+                bgOpacitySlider.addEventListener('input', function() {
+                    updateInstantPreview();
+                });
+            }
+            
+            const fontColorInput = document.getElementById('instantFontColor');
+            if (fontColorInput) {
+                fontColorInput.addEventListener('input', function() {
+                    updateInstantPreview();
+                });
+            }
+            
+            const bgColorInput = document.getElementById('instantBgColor');
+            if (bgColorInput) {
+                bgColorInput.addEventListener('input', function() {
+                    updateInstantPreview();
                 });
             }
         });
