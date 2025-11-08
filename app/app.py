@@ -169,10 +169,21 @@ def transcribe_audio(audio_file: str, model_size: str = 'base', language: str = 
             
             result = model.transcribe(audio_file, **options)
             
+            # معالجة segments لضمان وجود word timestamps
+            processed_segments = []
+            for seg in result.get('segments', []):
+                processed_seg = {
+                    'start': seg.get('start', 0),
+                    'end': seg.get('end', 0),
+                    'text': seg.get('text', '').strip(),
+                    'words': seg.get('words', [])  # word timestamps من Whisper
+                }
+                processed_segments.append(processed_seg)
+            
             return {
                 'text': result['text'],
                 'language': result.get('language', language),
-                'segments': result.get('segments', [])
+                'segments': processed_segments
             }
         except Exception as e:
             logger.error(f"فشل استخدام Whisper: {e}")
@@ -531,15 +542,15 @@ class SubtitleProcessor:
     @staticmethod
     def split_long_segments(segments: List[Dict], max_duration: float = 5.0, max_chars: int = 80) -> List[Dict]:
         """
-        تقسيم segments الطويلة إلى أجزاء أصغر
+        تقسيم segments الطويلة إلى أجزاء أصغر بناءً على الكلام والوقفات الطبيعية
         
         Args:
-            segments: قائمة segments
+            segments: قائمة segments (يجب أن تحتوي على 'words' مع timestamps إذا كانت متاحة)
             max_duration: الحد الأقصى لمدة كل segment بالثواني
             max_chars: الحد الأقصى لعدد الأحرف في كل segment
         
         Returns:
-            قائمة segments مقسمة
+            قائمة segments مقسمة بناءً على الكلام الفعلي
         """
         split_segments = []
         
@@ -547,6 +558,7 @@ class SubtitleProcessor:
             start_time = float(segment.get('start', 0))
             end_time = float(segment.get('end', start_time + 3))
             text = segment.get('text', '').strip()
+            words = segment.get('words', [])  # word timestamps إذا كانت متاحة
             
             if not text:
                 continue
@@ -562,50 +574,184 @@ class SubtitleProcessor:
                 })
                 continue
             
-            # تقسيم النص بناءً على علامات التوقف
-            # نقسم على النقاط، علامات الاستفهام، علامات التعجب، والفاصلات
-            import re
-            # تقسيم على علامات التوقف مع الاحتفاظ بها
-            sentences = re.split(r'([.!?،؛]\s*)', text)
+            # إذا كانت word timestamps متاحة، استخدمها لتقسيم ذكي
+            if words and len(words) > 0:
+                split_segments.extend(
+                    SubtitleProcessor._split_by_word_timestamps(
+                        words, text, start_time, end_time, max_duration, max_chars
+                    )
+                )
+            else:
+                # تقسيم بناءً على النص فقط (fallback)
+                split_segments.extend(
+                    SubtitleProcessor._split_by_text_only(
+                        text, start_time, end_time, max_duration, max_chars
+                    )
+                )
+        
+        return split_segments
+    
+    @staticmethod
+    def _split_by_word_timestamps(words: List[Dict], text: str, start_time: float, end_time: float, 
+                                   max_duration: float, max_chars: int) -> List[Dict]:
+        """تقسيم بناءً على word timestamps والوقفات الطبيعية"""
+        split_segments = []
+        
+        # تجميع الكلمات مع timestamps
+        word_list = []
+        for word_info in words:
+            if isinstance(word_info, dict):
+                word = word_info.get('word', '').strip()
+                word_start = float(word_info.get('start', 0))
+                word_end = float(word_info.get('end', 0))
+            else:
+                # إذا كان word_info كائن وليس dict
+                word = getattr(word_info, 'word', '').strip()
+                word_start = float(getattr(word_info, 'start', 0))
+                word_end = float(getattr(word_info, 'end', 0))
             
-            # تجميع الجمل مع علامات التوقف
-            current_sentence = ""
-            current_start = start_time
-            sentence_duration = duration / len(text) if len(text) > 0 else duration
+            if word:
+                word_list.append({
+                    'word': word,
+                    'start': word_start,
+                    'end': word_end
+                })
+        
+        if not word_list:
+            return SubtitleProcessor._split_by_text_only(text, start_time, end_time, max_duration, max_chars)
+        
+        # تقسيم بناءً على الوقفات الطبيعية والحدود
+        current_segment_words = []
+        current_start = word_list[0]['start']
+        current_text = ""
+        pause_threshold = 0.5  # وقفة 0.5 ثانية تعتبر نقطة تقسيم جيدة
+        
+        for i, word_data in enumerate(word_list):
+            word = word_data['word']
+            word_start = word_data['start']
+            word_end = word_data['end']
             
-            for i, part in enumerate(sentences):
-                if not part.strip():
-                    continue
+            # حساب الوقفة قبل هذه الكلمة
+            if i > 0:
+                prev_word_end = word_list[i-1]['end']
+                pause_duration = word_start - prev_word_end
+            else:
+                pause_duration = 0
+            
+            # إضافة الكلمة للـ segment الحالي
+            current_segment_words.append(word)
+            current_text = ' '.join(current_segment_words)
+            current_end = word_end
+            
+            # تحديد ما إذا كان يجب إنهاء الـ segment الحالي
+            should_split = False
+            
+            # 1. إذا كانت المدة تجاوزت الحد الأقصى
+            if current_end - current_start > max_duration:
+                should_split = True
+            
+            # 2. إذا كان عدد الأحرف تجاوز الحد الأقصى
+            elif len(current_text) > max_chars:
+                should_split = True
+            
+            # 3. إذا كانت هناك وقفة طويلة (pause) - نقطة تقسيم طبيعية
+            elif pause_duration > pause_threshold and len(current_segment_words) > 3:
+                should_split = True
+            
+            # 4. إذا انتهت الجملة بعلامة توقف (نقطة، علامة استفهام، إلخ)
+            elif word.rstrip().endswith(('.', '!', '?', '،', '؛')) and len(current_segment_words) >= 3:
+                should_split = True
+            
+            # 5. إذا كانت هناك فاصلة ووصلنا لطول معقول
+            elif word.rstrip().endswith((',', '،', ';', '؛')) and len(current_text) > max_chars * 0.7:
+                should_split = True
+            
+            if should_split:
+                # حفظ الـ segment الحالي
+                segment_text = ' '.join(current_segment_words).strip()
+                if segment_text:
+                    split_segments.append({
+                        'start': current_start,
+                        'end': current_end,
+                        'text': segment_text
+                    })
                 
-                current_sentence += part
-                
-                # إذا انتهت الجملة بعلامة توقف أو وصلنا للحد الأقصى
-                if part.strip().endswith(('.', '!', '?', '،', '؛')) or len(current_sentence) >= max_chars:
-                    if current_sentence.strip():
-                        # حساب الوقت بناءً على عدد الأحرف
-                        chars_ratio = len(current_sentence) / len(text) if len(text) > 0 else 1.0
-                        current_end = start_time + (duration * chars_ratio)
-                        
-                        # التأكد من أن المدة لا تتجاوز الحد الأقصى
-                        if current_end - current_start > max_duration:
-                            current_end = current_start + max_duration
-                        
-                        split_segments.append({
-                            'start': current_start,
-                            'end': current_end,
-                            'text': current_sentence.strip()
-                        })
-                        
-                        current_start = current_end
-                        current_sentence = ""
-            
-            # إضافة أي نص متبقي
-            if current_sentence.strip():
+                # بدء segment جديد
+                current_segment_words = []
+                current_start = word_start
+                current_text = ""
+        
+        # إضافة الـ segment الأخير
+        if current_segment_words:
+            segment_text = ' '.join(current_segment_words).strip()
+            if segment_text:
+                final_end = word_list[-1]['end']
                 split_segments.append({
                     'start': current_start,
-                    'end': end_time,
+                    'end': final_end,
+                    'text': segment_text
+                })
+        
+        return split_segments
+    
+    @staticmethod
+    def _split_by_text_only(text: str, start_time: float, end_time: float, 
+                            max_duration: float, max_chars: int) -> List[Dict]:
+        """تقسيم بناءً على النص فقط (fallback عندما لا تكون word timestamps متاحة)"""
+        split_segments = []
+        duration = end_time - start_time
+        
+        # تقسيم على علامات التوقف الطبيعية
+        import re
+        # تقسيم على علامات التوقف مع الاحتفاظ بها
+        sentences = re.split(r'([.!?،؛]\s*)', text)
+        
+        current_sentence = ""
+        current_start = start_time
+        total_chars = len(text)
+        
+        for i, part in enumerate(sentences):
+            if not part.strip():
+                continue
+            
+            current_sentence += part
+            
+            # حساب الوقت بناءً على نسبة الأحرف
+            chars_ratio = len(current_sentence) / total_chars if total_chars > 0 else 1.0
+            current_end = start_time + (duration * chars_ratio)
+            
+            # تحديد ما إذا كان يجب إنهاء الـ segment
+            should_split = False
+            
+            # إذا انتهت الجملة بعلامة توقف
+            if part.strip().endswith(('.', '!', '?', '،', '؛')):
+                should_split = True
+            
+            # إذا تجاوزت المدة أو الأحرف الحد الأقصى
+            elif current_end - current_start > max_duration or len(current_sentence) >= max_chars:
+                should_split = True
+            
+            if should_split and current_sentence.strip():
+                # التأكد من أن المدة معقولة
+                if current_end - current_start > max_duration:
+                    current_end = current_start + max_duration
+                
+                split_segments.append({
+                    'start': current_start,
+                    'end': current_end,
                     'text': current_sentence.strip()
                 })
+                
+                current_start = current_end
+                current_sentence = ""
+        
+        # إضافة أي نص متبقي
+        if current_sentence.strip():
+            split_segments.append({
+                'start': current_start,
+                'end': end_time,
+                'text': current_sentence.strip()
+            })
         
         return split_segments
     
@@ -1296,10 +1442,19 @@ def api_instant_translate():
             
             # استخدام segments المترجمة فقط - لا نستخدم subtitle_text
             if whisper_segments and len(whisper_segments) > 0:
-                # تقسيم segments الطويلة إلى أجزاء أصغر
+                # تقسيم segments الطويلة إلى أجزاء أصغر بناءً على الكلام والوقفات
                 logger.info(f"Original segments count: {len(whisper_segments)}")
-                whisper_segments = SubtitleProcessor.split_long_segments(whisper_segments, max_duration=5.0, max_chars=80)
-                logger.info(f"After splitting segments count: {len(whisper_segments)}")
+                
+                # التحقق من وجود word timestamps
+                has_word_timestamps = any(seg.get('words') for seg in whisper_segments)
+                logger.info(f"Has word timestamps: {has_word_timestamps}")
+                
+                whisper_segments = SubtitleProcessor.split_long_segments(
+                    whisper_segments, 
+                    max_duration=5.0,  # 5 ثواني كحد أقصى
+                    max_chars=80       # 80 حرف كحد أقصى
+                )
+                logger.info(f"After intelligent splitting: {len(whisper_segments)} segments")
                 
                 segments_for_srt = []
                 translator = GoogleTranslator(source=source_language, target='ar')
