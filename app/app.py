@@ -106,22 +106,35 @@ class VideoDownloader:
             'fragment_retries': 3,
             'concurrent_fragment_downloads': 16,
             'http_chunk_size': 10485760,
+            # تحسينات لتقليل التحذيرات
+            'ignoreerrors': False,
+            'no_check_certificate': True,
+            'prefer_insecure': False,
+            # استخدام extractor args لتقليل التحذيرات من YouTube
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],  # تجنب web_safari الذي يسبب تحذيرات SABR
+                }
+            },
         }
         
         # إعدادات الجودة
         if quality == 'best':
-            opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
-        elif quality == 'medium':
-            opts['format'] = 'bestvideo[height<=720][ext=mp4]+bestaudio/best[height<=720][ext=mp4]/best'
-        elif quality == 'low':
-            opts['format'] = 'bestvideo[height<=480][ext=mp4]+bestaudio/best[height<=480][ext=mp4]/best'
+            opts['format'] = 'bestvideo[ext=mp4][vcodec!*=av01]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+        elif quality == '720p' or quality == 'medium':
+            opts['format'] = 'bestvideo[height<=720][ext=mp4][vcodec!*=av01]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio/best[height<=720][ext=mp4]/best'
+        elif quality == '480p' or quality == 'low':
+            opts['format'] = 'bestvideo[height<=480][ext=mp4][vcodec!*=av01]+bestaudio[ext=m4a]/bestvideo[height<=480][ext=mp4]+bestaudio/best[height<=480][ext=mp4]/best'
         elif quality == 'audio':
-            opts['format'] = 'bestaudio[ext=m4a]/bestaudio'
+            opts['format'] = 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio'
             opts['postprocessors'] = [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }]
+        else:
+            # معالجة تنسيقات أخرى مثل 'bestvideo[height<=720]+bestaudio'
+            opts['format'] = quality
         
         # إعدادات خاصة بمنصة TikTok
         if platform == 'tiktok':
@@ -307,8 +320,27 @@ class SubtitleProcessor:
         vertical_offset: int = 0
     ) -> str:
         """إنشاء ملف ASS"""
-        ass_font_color = f"&H00{font_color[-2:]}{font_color[2:4]}{font_color[:2]}"
-        ass_bg_color = f"&H{hex(bg_opacity)[2:].upper():0>2}{bg_color[-2:]}{bg_color[2:4]}{bg_color[:2]}"
+        # ASS يستخدم تنسيق BGR (Blue-Green-Red) بدلاً من RGB
+        # تحويل من RGB hex إلى BGR hex
+        if len(font_color) == 6:
+            # RGB: RRGGBB -> BGR: BBGGRR
+            r = font_color[0:2]
+            g = font_color[2:4]
+            b = font_color[4:6]
+            ass_font_color = f"&H00{b}{g}{r}"  # BGR format
+        else:
+            ass_font_color = "&H00FFFFFF"  # أبيض افتراضي
+        
+        if len(bg_color) == 6:
+            # RGB: RRGGBB -> BGR: BBGGRR
+            r = bg_color[0:2]
+            g = bg_color[2:4]
+            b = bg_color[4:6]
+            # bg_opacity في ASS هو قيمة hex (00-FF)
+            opacity_hex = format(min(255, max(0, bg_opacity)), '02X')
+            ass_bg_color = f"&H{opacity_hex}{b}{g}{r}"  # BGR format with opacity
+        else:
+            ass_bg_color = f"&H{format(min(255, max(0, bg_opacity)), '02X')}000000"  # أسود افتراضي
         
         alignment = {'top': '8', 'center': '5', 'bottom': '2'}.get(position, '2')
         
@@ -630,13 +662,9 @@ def api_instant_translate():
             if not url:
                 return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
             
-            quality_map = {
-                'best': 'best',
-                '720p': 'bestvideo[height<=720]+bestaudio/best[height<=720]',
-                '480p': 'bestvideo[height<=480]+bestaudio/best[height<=480]'
-            }
-            
-            result = downloader.download(url, quality_map.get(quality, '720p'))
+            # استخدام quality مباشرة بدلاً من quality_map
+            # لأن downloader.download يتعامل مع quality كـ string
+            result = downloader.download(url, quality)
             
             if result['success']:
                 video_file = result['file']
@@ -906,19 +934,24 @@ def api_instant_translate():
             with open(srt_path, 'w', encoding='utf-8') as f:
                 f.write(srt_content)
             
-            font_size = int(settings.get('font_size', 22))
-            font_color = settings.get('font_color', '#FFFFFF')
-            bg_color = settings.get('bg_color', '#000000')
-            bg_opacity = int(settings.get('bg_opacity', 180))
-            position = settings.get('position', 'bottom')
-            font_name = settings.get('font_name', 'Arial')
-            vertical_offset = int(settings.get('vertical_offset', 0))
+            # استخراج الإعدادات من data مباشرة إذا لم تكن في settings
+            font_size = int(data.get('font_size') or settings.get('font_size', 22))
+            font_color = data.get('font_color') or settings.get('font_color', '#FFFFFF')
+            bg_color = data.get('bg_color') or settings.get('bg_color', '#000000')
+            bg_opacity = int(data.get('bg_opacity') or settings.get('bg_opacity', 128))
+            position = data.get('position') or settings.get('position', 'bottom')
+            font_name = data.get('font_name') or settings.get('font_name', 'Arial')
+            vertical_offset = int(data.get('vertical_offset') or settings.get('vertical_offset', 0))
+            
+            # التأكد من أن font_color و bg_color بدون #
+            font_color_clean = font_color.replace('#', '') if font_color else 'FFFFFF'
+            bg_color_clean = bg_color.replace('#', '') if bg_color else '000000'
             
             ass_content = SubtitleProcessor.create_ass_subtitle(
                 srt_content,
                 font_size=font_size,
-                font_color=font_color.replace('#', ''),
-                bg_color=bg_color.replace('#', ''),
+                font_color=font_color_clean,
+                bg_color=bg_color_clean,
                 bg_opacity=bg_opacity,
                 position=position,
                 font_name=font_name,
@@ -938,7 +971,8 @@ def api_instant_translate():
                 'font_color': font_color,
                 'bg_color': bg_color,
                 'bg_opacity': bg_opacity,
-                'position': position
+                'position': position,
+                'vertical_offset': vertical_offset
             }
             
             result = VideoProcessor.merge_subtitles(
@@ -1266,11 +1300,117 @@ def api_storage_info():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@app.route('/api/get-qualities', methods=['POST'])
+def api_get_qualities():
+    """الحصول على الجودات المتاحة للفيديو"""
+    try:
+        data = request.json
+        url = data.get('url')
+        
+        if not url:
+            return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
+        
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                
+                if not info:
+                    raise Exception("لم يتم العثور على معلومات الفيديو")
+                
+                formats = info.get('formats', [])
+                qualities = []
+                
+                # تجميع الجودات المتاحة
+                seen_qualities = set()
+                
+                for fmt in formats:
+                    height = fmt.get('height')
+                    ext = fmt.get('ext', 'mp4')
+                    format_id = fmt.get('format_id', '')
+                    vcodec = fmt.get('vcodec', 'none')
+                    acodec = fmt.get('acodec', 'none')
+                    
+                    # تخطي الصوت فقط إذا كان هناك فيديو
+                    if vcodec == 'none' and acodec != 'none':
+                        if 'audio' not in seen_qualities:
+                            qualities.append({
+                                'id': 'audio',
+                                'label': 'صوت فقط',
+                                'ext': ext if ext else 'mp3',
+                                'height': None,
+                                'format_id': format_id
+                            })
+                            seen_qualities.add('audio')
+                        continue
+                    
+                    if height and vcodec != 'none':
+                        quality_key = f"{height}p"
+                        if quality_key not in seen_qualities:
+                            qualities.append({
+                                'id': quality_key.lower(),
+                                'label': f'{height}p',
+                                'ext': ext if ext else 'mp4',
+                                'height': height,
+                                'format_id': format_id
+                            })
+                            seen_qualities.add(quality_key)
+                
+                # إضافة خيارات افتراضية إذا لم يتم العثور على جودات
+                if not qualities:
+                    qualities = [
+                        {'id': 'best', 'label': 'أفضل جودة', 'ext': 'mp4', 'height': None, 'format_id': 'best'},
+                        {'id': 'medium', 'label': 'جودة متوسطة', 'ext': 'mp4', 'height': 720, 'format_id': 'medium'},
+                        {'id': 'low', 'label': 'جودة منخفضة', 'ext': 'mp4', 'height': 480, 'format_id': 'low'},
+                        {'id': 'audio', 'label': 'صوت فقط', 'ext': 'mp3', 'height': None, 'format_id': 'audio'}
+                    ]
+                else:
+                    # إضافة خيار "أفضل جودة" في البداية
+                    qualities.insert(0, {
+                        'id': 'best',
+                        'label': 'أفضل جودة',
+                        'ext': 'mp4',
+                        'height': None,
+                        'format_id': 'best'
+                    })
+                
+                return jsonify({
+                    'success': True,
+                    'qualities': qualities,
+                    'title': info.get('title', 'Unknown'),
+                    'duration': info.get('duration', 0)
+                })
+        
+        except Exception as e:
+            logger.error(f"Get qualities error: {e}")
+            # إرجاع جودات افتراضية في حالة الخطأ
+            return jsonify({
+                'success': True,
+                'qualities': [
+                    {'id': 'best', 'label': 'أفضل جودة', 'ext': 'mp4'},
+                    {'id': 'medium', 'label': 'جودة متوسطة', 'ext': 'mp4'},
+                    {'id': 'low', 'label': 'جودة منخفضة', 'ext': 'mp4'},
+                    {'id': 'audio', 'label': 'صوت فقط', 'ext': 'mp3'}
+                ],
+                'message': f'تم استخدام جودات افتراضية: {str(e)}'
+            })
+    
+    except Exception as e:
+        logger.error(f"Get qualities API error: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/cleanup', methods=['POST'])
 @app.route('/api/cleanup-files', methods=['POST'])
 def api_cleanup_files():
     """حذف الملفات"""
     try:
-        data = request.json
+        data = request.json or {}
         cleanup_type = data.get('type', 'all')
         
         deleted_count = 0
