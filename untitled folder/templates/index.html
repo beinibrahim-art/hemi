@@ -1575,10 +1575,13 @@
                 }
 
                 window.tempTranscriptFile = transcribeResponse.data.temp_file;
+                window.transcriptSegments = transcribeResponse.data.segments || [];
                 updateInstantProgress(60, 'جاري الترجمة...');
 
+                // إرسال segments مع التوقيتات للترجمة الوقتية
                 const translateResponse = await axios.post('/api/instant-translate', {
                     text: transcribeResponse.data.text,
+                    segments: window.transcriptSegments, // إرسال segments مع التوقيتات
                     temp_transcript_file: window.tempTranscriptFile,
                     step: 'translate',
                     source_lang: transcribeResponse.data.language || 'auto',
@@ -1591,6 +1594,7 @@
 
                 window.tempTranslatedFile = translateResponse.data.temp_file;
                 window.instantTranslatedText = translateResponse.data.translated_text;
+                window.translatedSegments = translateResponse.data.translated_segments || [];
                 window.instantVideoFile = videoFile || downloadResponse.data.file;
                 
                 updateInstantProgress(70, 'جاري تحضير المعاينة...');
@@ -1837,7 +1841,7 @@
                 const fontSize = document.getElementById('instantFontSize')?.value || 20;
                 const fontColor = document.getElementById('instantFontColor')?.value || '#FFFFFF';
                 const bgColor = document.getElementById('instantBgColor')?.value || '#000000';
-                const bgOpacity = document.getElementById('instantBgOpacity')?.value || 128;
+                const bgOpacity = parseInt(document.getElementById('instantBgOpacity')?.value || 128);
                 const verticalOffset = parseInt(document.getElementById('instantVerticalOffset')?.value || 0);
                 
                 const response = await axios.post('/api/instant-translate', {
@@ -1848,12 +1852,12 @@
                     temp_audio_file: tempAudioFile,
                     temp_transcript_file: tempTranscriptFile,
                     temp_translated_file: tempTranslatedFile,
-                    font_size: fontSize,
-                    font_color: fontColor,
-                    bg_color: bgColor,
-                    bg_opacity: bgOpacity,
+                    fontSize: fontSize,
+                    fontColor: fontColor,
+                    bgColor: bgColor,
+                    bgOpacity: bgOpacity, // التأكد من أنه رقم
                     position: window.instantSelectedPosition || 'bottom',
-                    font_name: window.instantSelectedFont || 'Arial',
+                    fontFamily: window.instantSelectedFont || 'Arial',
                     quality: window.instantSelectedQuality || 'original',
                     vertical_offset: verticalOffset
                 });
