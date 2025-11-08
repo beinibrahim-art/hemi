@@ -720,7 +720,8 @@ class VideoProcessor:
             # التأكد من أن المسارات مطلقة
             video_path = str(Path(video_path).resolve())
             subtitle_path = str(Path(subtitle_path).resolve())
-            output_path = str(Path(output_path).resolve())
+            output_path_str = str(Path(output_path).resolve())
+            output_path = Path(output_path_str)  # الاحتفاظ بـ Path object للتحقق من الملف
             
             # تحويل الفيديو إلى H.264 قبل الدمج إذا لم يكن كذلك
             video_file = Path(video_path)
@@ -817,7 +818,9 @@ class VideoProcessor:
                 # [ يجب أن يكون \[
                 # ] يجب أن يكون \]
                 # \ يجب أن يكون \\ (إذا بقي أي backslash)
+                # ' يجب أن يكون \' (إذا كان في quotes)
                 escaped = escaped.replace('\\', '\\\\')  # تهريب أي backslash متبقي
+                escaped = escaped.replace("'", "\\'")  # تهريب single quotes
                 escaped = escaped.replace(':', '\\:')
                 escaped = escaped.replace(',', '\\,')
                 escaped = escaped.replace('[', '\\[')
@@ -825,6 +828,13 @@ class VideoProcessor:
                 return escaped
             
             subtitle_path_escaped = escape_ffmpeg_path(subtitle_path_abs)
+            
+            # استخدام quotes حول المسار إذا كان يحتوي على مسافات أو أحرف خاصة
+            # هذا يساعد ffmpeg على فهم المسار بشكل صحيح
+            has_spaces_or_special = ' ' in subtitle_path_abs or any(c in subtitle_path_abs for c in [':', ',', '[', ']'])
+            if has_spaces_or_special:
+                # استخدام single quotes حول المسار المهرّب
+                subtitle_path_escaped = f"'{subtitle_path_escaped}'"
             
             # دمج مع الفيديو
             # استخدام subtitles filter لـ SRT (أفضل للترجمة الفورية)
@@ -855,17 +865,17 @@ class VideoProcessor:
                 '-sub_charenc', 'UTF-8',  # تحديد ترميز الترجمة كـ UTF-8
                 '-f', 'mp4',  # إجبار صيغة MP4
                 '-y',
-                output_path
+                str(output_path)
             ]
             
             logger.info(f"Running ffmpeg command: {' '.join(cmd)}")
             logger.info(f"Video file: {video_path}, exists: {os.path.exists(video_path)}")
             logger.info(f"Subtitle file: {subtitle_path}, exists: {os.path.exists(subtitle_path)}")
-            logger.info(f"Output file: {output_path}")
+            logger.info(f"Output file: {str(output_path)}")
             logger.info(f"Video filter: {vf_filter}")
             
             # التأكد من وجود مجلد الإخراج
-            output_dir = Path(output_path).parent
+            output_dir = output_path.parent
             output_dir.mkdir(parents=True, exist_ok=True)
             
             # التأكد من أن ملف الفيديو موجود
@@ -890,7 +900,7 @@ class VideoProcessor:
                 logger.error(f"Subtitle path (absolute): {subtitle_path_abs}")
                 logger.error(f"Subtitle path (escaped): {subtitle_path_escaped}")
                 logger.error(f"Video filter: {vf_filter}")
-                logger.error(f"Output path: {output_path}")
+                logger.error(f"Output path: {str(output_path)}")
                 if process.stderr:
                     logger.error(f"STDERR (first 3000 chars): {process.stderr[:3000]}")
                 if process.stdout:
@@ -924,6 +934,7 @@ class VideoProcessor:
                         
                         # تهريب الأحرف الخاصة
                         escaped = escaped.replace('\\', '\\\\')
+                        escaped = escaped.replace("'", "\\'")
                         escaped = escaped.replace(':', '\\:')
                         escaped = escaped.replace(',', '\\,')
                         escaped = escaped.replace('[', '\\[')
@@ -931,6 +942,11 @@ class VideoProcessor:
                         return escaped
                     
                     ass_path_escaped = escape_ffmpeg_path(ass_path_abs)
+                    
+                    # استخدام quotes حول المسار إذا كان يحتوي على مسافات أو أحرف خاصة
+                    has_spaces_or_special = ' ' in ass_path_abs or any(c in ass_path_abs for c in [':', ',', '[', ']'])
+                    if has_spaces_or_special:
+                        ass_path_escaped = f"'{ass_path_escaped}'"
                     
                     vf_filter_alt = f"ass={ass_path_escaped}"
                     
@@ -951,7 +967,7 @@ class VideoProcessor:
                         '-sub_charenc', 'UTF-8',  # تحديد ترميز الترجمة كـ UTF-8
                         '-f', 'mp4',  # إجبار صيغة MP4
                         '-y',
-                        output_path
+                        str(output_path)
                     ]
                     
                     logger.info(f"Trying alternative command with ASS filter...")
@@ -974,7 +990,7 @@ class VideoProcessor:
                             logger.info(f"Successfully merged with ASS filter. Output size: {output_path.stat().st_size} bytes")
                             return True
                         else:
-                            logger.error(f"ASS filter succeeded but output file not found or empty: {output_path}")
+                            logger.error(f"ASS filter succeeded but output file not found or empty: {str(output_path)}")
                             return False
                 else:
                     logger.error("Not an SRT file, cannot try ASS fallback")
@@ -987,10 +1003,10 @@ class VideoProcessor:
                     logger.info(f"Successfully merged subtitles using {'subtitles' if subtitle_path.endswith('.srt') else 'ass'} filter. Output size: {file_size} bytes")
                     return True
                 else:
-                    logger.error(f"Output file exists but is empty (0 bytes): {output_path}")
+                    logger.error(f"Output file exists but is empty (0 bytes): {str(output_path)}")
                     return False
             else:
-                logger.error(f"FFmpeg succeeded (return code 0) but output file not found: {output_path}")
+                logger.error(f"FFmpeg succeeded (return code 0) but output file not found: {str(output_path)}")
                 logger.error(f"Output directory exists: {output_dir.exists()}")
                 logger.error(f"Output directory is writable: {os.access(str(output_dir), os.W_OK)}")
                 return False
@@ -2232,9 +2248,16 @@ def api_instant_translate():
         return jsonify({'success': False, 'message': 'خطوة غير صحيحة'})
     
     except Exception as e:
-        logger.error(f"API error: {e}")
+        logger.error(f"API error in /api/instant-translate: {e}")
+        logger.error(f"Error type: {type(e).__name__}")
         logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
+        # إرجاع رسالة خطأ واضحة للمستخدم
+        error_message = str(e) if str(e) else 'حدث خطأ غير متوقع'
+        return jsonify({
+            'success': False, 
+            'message': f'خطأ في API: {error_message}',
+            'error_type': type(e).__name__
+        }), 500
 
 
 @app.route('/api/get-qualities', methods=['POST'])
