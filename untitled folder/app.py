@@ -241,6 +241,135 @@ class SubtitleProcessor:
     """معالج الترجمة المحسّن"""
     
     @staticmethod
+    def improve_sync_with_words(segments: List[Dict], translated_segments: List[Dict]) -> List[Dict]:
+        """
+        تحسين المزامنة باستخدام word-level timestamps
+        يحسب التوقيتات بناءً على طول النص المترجم مقارنة بالنص الأصلي
+        """
+        improved_segments = []
+        
+        for i, orig_seg in enumerate(segments):
+            if i >= len(translated_segments):
+                break
+            
+            orig_text = orig_seg.get('text', '').strip()
+            orig_start = float(orig_seg.get('start', 0))
+            orig_end = float(orig_seg.get('end', orig_start + 3))
+            orig_duration = orig_end - orig_start
+            
+            trans_seg = translated_segments[i]
+            trans_text = trans_seg.get('text', '').strip()
+            
+            if not orig_text or not trans_text:
+                continue
+            
+            # استخدام word-level timestamps إذا كانت متوفرة
+            orig_words = orig_seg.get('words', [])
+            
+            if orig_words and len(orig_words) > 0:
+                # حساب التوقيتات بناءً على الكلمات
+                orig_word_count = len(orig_text.split())
+                trans_word_count = len(trans_text.split())
+                
+                # إذا كان النص المترجم أطول، نمدد المدة قليلاً
+                # إذا كان أقصر، نحافظ على المدة الأصلية
+                if trans_word_count > 0 and orig_word_count > 0:
+                    word_ratio = trans_word_count / orig_word_count
+                    # تعديل المدة بناءً على النسبة (مع حد أقصى 1.5x)
+                    adjusted_duration = orig_duration * min(1.5, max(0.5, word_ratio))
+                    adjusted_end = orig_start + adjusted_duration
+                else:
+                    adjusted_end = orig_end
+                
+                improved_segments.append({
+                    'start': orig_start,
+                    'end': adjusted_end,
+                    'text': trans_text
+                })
+            else:
+                # بدون word timestamps، استخدام النسبة بناءً على عدد الأحرف
+                orig_char_count = len(orig_text)
+                trans_char_count = len(trans_text)
+                
+                if orig_char_count > 0 and trans_char_count > 0:
+                    char_ratio = trans_char_count / orig_char_count
+                    # تعديل المدة بناءً على النسبة (مع حد أقصى 1.5x)
+                    adjusted_duration = orig_duration * min(1.5, max(0.5, char_ratio))
+                    adjusted_end = orig_start + adjusted_duration
+                else:
+                    adjusted_end = orig_end
+                
+                improved_segments.append({
+                    'start': orig_start,
+                    'end': adjusted_end,
+                    'text': trans_text
+                })
+        
+        return improved_segments
+    
+    @staticmethod
+    def smart_split_translation(original_segments: List[Dict], translated_text: str) -> List[Dict]:
+        """
+        تقسيم ذكي للترجمة مع الحفاظ على المزامنة
+        يقسم النص المترجم بناءً على segments الأصلية مع تحسين التوقيتات
+        """
+        translated_segments = []
+        
+        # تقسيم النص المترجم بناءً على عدد segments الأصلية
+        orig_total_words = sum(len(seg.get('text', '').split()) for seg in original_segments)
+        trans_words = translated_text.split()
+        
+        if orig_total_words == 0 or len(trans_words) == 0:
+            return translated_segments
+        
+        # حساب عدد الكلمات لكل segment
+        word_index = 0
+        for i, orig_seg in enumerate(original_segments):
+            orig_text = orig_seg.get('text', '').strip()
+            orig_start = float(orig_seg.get('start', 0))
+            orig_end = float(orig_seg.get('end', orig_start + 3))
+            orig_duration = orig_end - orig_start
+            
+            if not orig_text:
+                continue
+            
+            orig_word_count = len(orig_text.split())
+            
+            # حساب عدد الكلمات المترجمة المقابلة
+            # بناءً على نسبة الكلمات الإجمالية
+            if orig_total_words > 0:
+                segment_ratio = orig_word_count / orig_total_words
+                trans_word_count = max(1, int(len(trans_words) * segment_ratio))
+            else:
+                trans_word_count = orig_word_count
+            
+            # أخذ الكلمات المترجمة المقابلة
+            trans_segment_words = trans_words[word_index:word_index + trans_word_count]
+            trans_segment_text = ' '.join(trans_segment_words).strip()
+            
+            if trans_segment_text:
+                # تحسين التوقيت بناءً على طول النص المترجم
+                orig_char_count = len(orig_text)
+                trans_char_count = len(trans_segment_text)
+                
+                if orig_char_count > 0:
+                    char_ratio = trans_char_count / orig_char_count
+                    adjusted_duration = orig_duration * min(1.5, max(0.5, char_ratio))
+                    adjusted_end = orig_start + adjusted_duration
+                else:
+                    adjusted_end = orig_end
+                
+                translated_segments.append({
+                    'start': orig_start,
+                    'end': adjusted_end,
+                    'text': trans_segment_text
+                })
+                
+                word_index += trans_word_count
+        
+        return translated_segments
+    
+    @staticmethod
     def split_long_segments(segments: List[Dict], max_duration: float = 5.0, 
                            max_chars: int = 80) -> List[Dict]:
         """تقسيم segments الطويلة بذكاء"""
@@ -313,20 +442,119 @@ class SubtitleProcessor:
     
     @staticmethod
     def create_srt(segments: List[Dict]) -> str:
-        """إنشاء ملف SRT من segments"""
+        """إنشاء ملف SRT من segments مع تنظيف وترتيب ودعم كامل للعربية"""
+        if not segments:
+            return ""
+        
+        # تنظيف وترتيب segments
+        cleaned_segments = SubtitleProcessor.clean_and_merge_segments(segments)
+        
         srt_lines = []
         
-        for i, seg in enumerate(segments, 1):
-            start = SubtitleProcessor._format_time(seg['start'])
-            end = SubtitleProcessor._format_time(seg['end'])
-            text = seg['text']
+        for i, seg in enumerate(cleaned_segments, 1):
+            start = float(seg.get('start', 0))
+            end = float(seg.get('end', start + 3))
+            text = seg.get('text', '').strip()
+            
+            # التأكد من أن التوقيتات منطقية
+            if end <= start:
+                end = start + 1.0  # مدة دنيا ثانية واحدة
+            
+            # التأكد من أن النص غير فارغ
+            if not text:
+                continue
+            
+            start_str = SubtitleProcessor._format_time(start)
+            end_str = SubtitleProcessor._format_time(end)
             
             srt_lines.append(f"{i}")
-            srt_lines.append(f"{start} --> {end}")
+            srt_lines.append(f"{start_str} --> {end_str}")
             srt_lines.append(text)
             srt_lines.append("")
         
+        # إرجاع SRT مع دعم UTF-8
         return '\n'.join(srt_lines)
+    
+    @staticmethod
+    def save_srt_file(content: str, file_path: Path) -> bool:
+        """حفظ ملف SRT بترميز UTF-8 مع BOM لدعم أفضل للعربية"""
+        try:
+            # إضافة BOM UTF-8 لضمان قراءة صحيحة في جميع المشغلات
+            bom = '\ufeff'
+            with open(file_path, 'w', encoding='utf-8-sig') as f:
+                f.write(bom + content)
+            return True
+        except Exception as e:
+            logger.error(f"Error saving SRT file: {e}")
+            # Fallback: حفظ بدون BOM
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                return True
+            except Exception as e2:
+                logger.error(f"Error saving SRT file (fallback): {e2}")
+                return False
+    
+    @staticmethod
+    def clean_and_merge_segments(segments: List[Dict]) -> List[Dict]:
+        """
+        تنظيف ودمج segments المتداخلة والمكررة
+        يزيل التكرار ويضمن التوقيتات المنطقية
+        """
+        if not segments:
+            return []
+        
+        # ترتيب segments حسب وقت البداية
+        sorted_segments = sorted(segments, key=lambda x: float(x.get('start', 0)))
+        
+        cleaned = []
+        last_end = 0.0
+        
+        for seg in sorted_segments:
+            start = float(seg.get('start', 0))
+            end = float(seg.get('end', start + 3))
+            text = seg.get('text', '').strip()
+            
+            # تخطي segments فارغة
+            if not text:
+                continue
+            
+            # التأكد من أن التوقيتات منطقية
+            if end <= start:
+                end = start + max(1.0, len(text) * 0.1)  # مدة بناءً على طول النص
+            
+            # إذا كان segment متداخل مع السابق، دمجهما
+            if cleaned and start < last_end:
+                # دمج مع segment السابق
+                prev_seg = cleaned[-1]
+                prev_text = prev_seg.get('text', '').strip()
+                
+                # إذا كان النص مختلف، أضفه
+                if text != prev_text:
+                    # تمديد نهاية segment السابق قليلاً
+                    prev_seg['end'] = min(start + 0.5, end)
+                    # بدء segment جديد بعد السابق مباشرة
+                    start = prev_seg['end'] + 0.1
+                    cleaned.append({
+                        'start': start,
+                        'end': end,
+                        'text': text
+                    })
+                    last_end = end
+            else:
+                # إضافة segment جديد
+                # التأكد من وجود فجوة صغيرة بين segments
+                if cleaned and start < last_end + 0.1:
+                    start = last_end + 0.1
+                
+                cleaned.append({
+                    'start': start,
+                    'end': end,
+                    'text': text
+                })
+                last_end = end
+        
+        return cleaned
     
     @staticmethod
     def _format_time(seconds: float) -> str:
@@ -340,18 +568,48 @@ class SubtitleProcessor:
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{millisecs:03d}"
     
     @staticmethod
+    def get_arabic_font(font_family: str) -> str:
+        """الحصول على خط عربي مناسب"""
+        # قائمة بالخطوط العربية المدعومة بشكل جيد
+        arabic_fonts = [
+            'Arial', 'Tahoma', 'DejaVu Sans', 'Segoe UI', 'Noto Sans Arabic',
+            'Cairo', 'Amiri', 'Scheherazade', 'Lateef', 'IBM Plex Sans Arabic'
+        ]
+        
+        # إذا كان الخط المطلوب في القائمة، استخدمه
+        if font_family in arabic_fonts:
+            return font_family
+        
+        # محاولة اكتشاف خطوط عربية متاحة
+        # استخدام Arial أو Tahoma كافتراضي (متوفران في معظم الأنظمة)
+        return 'Arial'  # Arial يدعم العربية بشكل جيد
+    
+    @staticmethod
     def create_ass(srt_content: str, settings: Dict) -> str:
-        """إنشاء ملف ASS مع إعدادات مخصصة"""
+        """إنشاء ملف ASS مع إعدادات مخصصة ودعم كامل للعربية"""
         # تحويل جميع القيم إلى الأنواع الصحيحة
         font_size = int(settings.get('fontSize', settings.get('font_size', 24)))
         font_color = str(settings.get('fontColor', settings.get('font_color', '#FFFFFF')))
         bg_color = str(settings.get('bgColor', settings.get('bg_color', '#000000')))
-        bg_opacity = int(settings.get('bgOpacity', settings.get('bg_opacity', 180)))
+        
+        # التأكد من تحويل bg_opacity إلى int بشكل آمن
+        bg_opacity_raw = settings.get('bgOpacity', settings.get('bg_opacity', 180))
+        if isinstance(bg_opacity_raw, str):
+            try:
+                bg_opacity = int(bg_opacity_raw)
+            except (ValueError, TypeError):
+                bg_opacity = 180
+        else:
+            bg_opacity = int(bg_opacity_raw)
+        
         position = str(settings.get('position', 'bottom'))
         font_family = str(settings.get('fontFamily', settings.get('font_name', 'Arial')))
         
+        # استخدام خط عربي مناسب
+        arabic_font = SubtitleProcessor.get_arabic_font(font_family)
+        
         # التأكد من أن bg_opacity في النطاق الصحيح (0-255)
-        bg_opacity = max(0, min(255, bg_opacity))
+        bg_opacity = max(0, min(255, int(bg_opacity)))
         
         # تحويل ألوان RGB إلى BGR
         def rgb_to_bgr(hex_color):
@@ -372,14 +630,21 @@ class SubtitleProcessor:
         bg_color_part = bg_color_bgr[3:] if len(bg_color_bgr) > 3 else bg_color_bgr
         back_colour = "&H" + bg_opacity_hex + bg_color_part
         
-        # استخدام string concatenation لتجنب مشاكل f-string مع الأحرف الخاصة
+        # إنشاء ASS header مع دعم UTF-8 للعربية
+        # Encoding: 1 = UTF-8 (مهم للعربية)
         ass_header = """[Script Info]
 Title: Generated Subtitles
 ScriptType: v4.00+
+WrapStyle: 0
+ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,""" + str(font_family) + "," + str(font_size) + "," + str(primary_color) + ",&H000000FF,&H00000000," + str(back_colour) + ",0,0,0,0,100,100,0,0,3,2,1," + str(alignment) + ",10,10," + str(margin_v) + ",1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
+Style: Default,""" + str(arabic_font) + "," + str(font_size) + "," + str(primary_color) + ",&H000000FF,&H00000000," + str(back_colour) + ",0,0,0,0,100,100,0,0,3,2,1," + str(alignment) + ",10,10," + str(margin_v) + """,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
         
         events = []
         lines = srt_content.strip().split('\n')
@@ -450,62 +715,273 @@ class VideoProcessor:
     @staticmethod
     def merge_subtitles(video_path: str, subtitle_path: str, 
                        output_path: str, settings: Dict) -> bool:
-        """دمج الترجمة مع الفيديو"""
+        """دمج الترجمة مع الفيديو - مع تحويل إجباري إلى H.264"""
         try:
             # التأكد من أن المسارات مطلقة
             video_path = str(Path(video_path).resolve())
             subtitle_path = str(Path(subtitle_path).resolve())
             output_path = str(Path(output_path).resolve())
             
-            # إنشاء ملف ASS
-            if subtitle_path.endswith('.srt'):
-                with open(subtitle_path, 'r', encoding='utf-8') as f:
-                    srt_content = f.read()
-                
-                ass_content = SubtitleProcessor.create_ass(srt_content, settings)
-                ass_path = subtitle_path.replace('.srt', '.ass')
-                
-                with open(ass_path, 'w', encoding='utf-8') as f:
-                    f.write(ass_content)
-                
-                subtitle_path = str(Path(ass_path).resolve())
+            # تحويل الفيديو إلى H.264 قبل الدمج إذا لم يكن كذلك
+            video_file = Path(video_path)
+            if video_file.exists():
+                try:
+                    # التحقق من codec
+                    probe_cmd = [
+                        'ffprobe',
+                        '-v', 'error',
+                        '-select_streams', 'v:0',
+                        '-show_entries', 'stream=codec_name',
+                        '-of', 'default=noprint_wrappers=1:nokey=1',
+                        str(video_file)
+                    ]
+                    probe_result = subprocess.run(probe_cmd, capture_output=True, timeout=10, text=True)
+                    codec = probe_result.stdout.strip().lower()
+                    
+                    # إذا لم يكن H.264، قم بالتحويل أولاً
+                    if codec and codec != 'h264':
+                        logger.info(f"Converting source video to H.264 before merge: {codec} -> h264")
+                        temp_h264 = video_file.parent / f"{video_file.stem}_temp_h264_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+                        convert_cmd = [
+                            'ffmpeg',
+                            '-i', str(video_file),
+                            '-c:v', 'libx264',
+                            '-profile:v', 'high',
+                            '-level', '4.0',
+                            '-pix_fmt', 'yuv420p',
+                            '-c:a', 'aac',
+                            '-b:a', '128k',
+                            '-movflags', '+faststart',
+                            '-y',
+                            str(temp_h264)
+                        ]
+                        logger.info(f"Converting video: {' '.join(convert_cmd)}")
+                        convert_result = subprocess.run(convert_cmd, capture_output=True, timeout=300, text=True)
+                        if convert_result.returncode == 0 and temp_h264.exists():
+                            video_path = str(temp_h264)
+                            logger.info(f"Source video converted to H.264: {temp_h264}")
+                        else:
+                            logger.warning(f"Video conversion failed or incomplete: {convert_result.stderr}")
+                            # المتابعة مع الفيديو الأصلي
+                    else:
+                        logger.info(f"Video already H.264: {codec}")
+                except Exception as e:
+                    logger.warning(f"Could not check/convert source video codec: {e}, proceeding with original video")
             
-            # Escape المسار للـ ffmpeg
-            # المشكلة: f-string يحاول تفسير أحرف خاصة في المسار
-            # الحل: استخدام string concatenation بدلاً من f-string
+            # استخدام SRT مباشرة إذا كان متوفراً، أو تحويله إلى ASS
+            # SRT أفضل للترجمة الفورية لأنه أبسط وأكثر دقة
+            use_srt_directly = True  # استخدام SRT مباشرة
+            
+            if subtitle_path.endswith('.srt'):
+                if use_srt_directly:
+                    # استخدام SRT مباشرة مع subtitles filter (أفضل للترجمة الفورية)
+                    subtitle_path = str(Path(subtitle_path).resolve())
+                else:
+                    # تحويل إلى ASS للتحكم الكامل في التنسيق
+                    with open(subtitle_path, 'r', encoding='utf-8') as f:
+                        srt_content = f.read()
+                    
+                    ass_content = SubtitleProcessor.create_ass(srt_content, settings)
+                    ass_path = subtitle_path.replace('.srt', '.ass')
+                    
+                    # حفظ ASS بترميز UTF-8 مع BOM لدعم العربية
+                    with open(ass_path, 'w', encoding='utf-8-sig') as f:
+                        f.write(ass_content)
+                    
+                    subtitle_path = str(Path(ass_path).resolve())
+            
+            # التأكد من وجود ملف الترجمة
+            if not os.path.exists(subtitle_path):
+                logger.error(f"Subtitle file does not exist: {subtitle_path}")
+                return False
+            
+            # Escape المسار للـ ffmpeg بشكل صحيح
             import platform
+            
+            # استخدام المسار المطلق مباشرة
+            subtitle_path_abs = str(Path(subtitle_path).resolve())
+            
+            # طريقة أبسط: استخدام subtitles filter مع المسار المطلق
+            # على Linux/Mac، يمكن استخدام المسار مباشرة إذا لم يكن فيه مسافات
+            # إذا كان فيه مسافات، نستخدم escape بسيط
+            
+            # التحقق من وجود مسافات في المسار
+            has_spaces = ' ' in subtitle_path_abs
+            has_special = any(c in subtitle_path_abs for c in ['[', ']', ':', ','])
+            
             if platform.system() == 'Windows':
-                subtitle_path_escaped = subtitle_path.replace('\\', '/').replace(':', '\\:')
+                # على Windows، تحويل المسار إلى format مناسب
+                if has_spaces or has_special:
+                    subtitle_path_escaped = subtitle_path_abs.replace('\\', '/').replace(':', '\\:')
+                else:
+                    subtitle_path_escaped = subtitle_path_abs.replace('\\', '/')
             else:
-                # على Linux/Mac، escape المسافات والأحرف الخاصة
-                subtitle_path_escaped = subtitle_path.replace('\\', '\\\\').replace(' ', '\\ ')
+                # على Linux/Mac
+                if has_spaces or has_special:
+                    # escape المسافات والأحرف الخاصة
+                    subtitle_path_escaped = subtitle_path_abs.replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:').replace(',', '\\,')
+                else:
+                    # استخدام المسار مباشرة
+                    subtitle_path_escaped = subtitle_path_abs
             
             # دمج مع الفيديو
-            # استخدام string concatenation لتجنب مشاكل f-string
-            vf_filter = 'ass=' + subtitle_path_escaped
+            # استخدام subtitles filter لـ SRT (أفضل للترجمة الفورية)
+            # أو ass filter لـ ASS (للتحكم الكامل في التنسيق)
+            if subtitle_path.endswith('.srt'):
+                # استخدام subtitles filter لـ SRT
+                vf_filter = f"subtitles={subtitle_path_escaped}"
+            else:
+                # استخدام ass filter لـ ASS
+                vf_filter = f"ass={subtitle_path_escaped}"
             
+            # محاولة استخدام ass filter أو subtitles filter مع دعم UTF-8 للعربية
+            # إعدادات متوافقة مع جميع الأجهزة (MP4 H.264)
             cmd = [
                 'ffmpeg',
                 '-i', video_path,
                 '-vf', vf_filter,
-                '-c:a', 'copy',
-                '-c:v', 'libx264',
-                '-preset', 'fast',
-                '-crf', '23',
+                '-c:v', 'libx264',  # H.264 codec
+                '-preset', 'medium',  # توازن بين السرعة والجودة
+                '-crf', '23',  # جودة جيدة
+                '-profile:v', 'high',  # High profile متوافق مع جميع الأجهزة
+                '-level', '4.0',  # Level 4.0 متوافق مع معظم الأجهزة
+                '-pix_fmt', 'yuv420p',  # متوافق مع جميع الأجهزة
+                '-c:a', 'aac',  # AAC audio متوافق
+                '-b:a', '128k',  # bitrate صوت جيد
+                '-movflags', '+faststart',  # لضمان التشغيل السريع
                 '-threads', '0',
+                '-sub_charenc', 'UTF-8',  # تحديد ترميز الترجمة كـ UTF-8
+                '-f', 'mp4',  # إجبار صيغة MP4
                 '-y',
                 output_path
             ]
             
             logger.info(f"Running ffmpeg command: {' '.join(cmd)}")
+            logger.info(f"Video file: {video_path}, exists: {os.path.exists(video_path)}")
+            logger.info(f"Subtitle file: {subtitle_path}, exists: {os.path.exists(subtitle_path)}")
+            logger.info(f"Output file: {output_path}")
+            logger.info(f"Video filter: {vf_filter}")
             
+            # التأكد من وجود مجلد الإخراج
+            output_dir = Path(output_path).parent
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # التأكد من أن ملف الفيديو موجود
+            if not os.path.exists(video_path):
+                logger.error(f"Video file does not exist: {video_path}")
+                return False
+            
+            # التأكد من أن ملف الترجمة موجود
+            if not os.path.exists(subtitle_path):
+                logger.error(f"Subtitle file does not exist: {subtitle_path}")
+                return False
+            
+            # تشغيل ffmpeg مع logging أفضل
+            logger.info(f"Executing ffmpeg command...")
             process = subprocess.run(cmd, capture_output=True, timeout=600, text=True)
             
             if process.returncode != 0:
-                logger.error(f"FFmpeg error: {process.stderr}")
-                return False
+                logger.error(f"FFmpeg failed with return code: {process.returncode}")
+                logger.error(f"Full command: {' '.join(cmd)}")
+                if process.stderr:
+                    logger.error(f"STDERR (first 2000 chars): {process.stderr[:2000]}")
+                if process.stdout:
+                    logger.error(f"STDOUT (first 2000 chars): {process.stdout[:2000]}")
+                logger.error(f"Video path (exists: {os.path.exists(video_path)}): {video_path}")
+                logger.error(f"Subtitle path (exists: {os.path.exists(subtitle_path)}): {subtitle_path}")
+                logger.error(f"Subtitle path escaped: {subtitle_path_escaped}")
+                logger.error(f"Video filter: {vf_filter}")
+                logger.error(f"Output path: {output_path}")
+                
+                # إذا كان يستخدم subtitles filter وفشل، جرب ass filter
+                if subtitle_path.endswith('.srt'):
+                    logger.info("Trying with ass filter as fallback...")
+                    # تحويل SRT إلى ASS
+                    with open(subtitle_path, 'r', encoding='utf-8') as f:
+                        srt_content = f.read()
+                    
+                    ass_content = SubtitleProcessor.create_ass(srt_content, settings)
+                    ass_path = subtitle_path.replace('.srt', '.ass')
+                    
+                    # حفظ ASS بترميز UTF-8 مع BOM لدعم العربية
+                    with open(ass_path, 'w', encoding='utf-8-sig') as f:
+                        f.write(ass_content)
+                    
+                    # Escape المسار بشكل صحيح للـ ASS
+                    ass_path_abs = str(Path(ass_path).resolve())
+                    has_spaces = ' ' in ass_path_abs
+                    has_special = any(c in ass_path_abs for c in ['[', ']', ':', ','])
+                    
+                    if platform.system() == 'Windows':
+                        if has_spaces or has_special:
+                            ass_path_escaped = ass_path_abs.replace('\\', '/').replace(':', '\\:')
+                        else:
+                            ass_path_escaped = ass_path_abs.replace('\\', '/')
+                    else:
+                        if has_spaces or has_special:
+                            ass_path_escaped = ass_path_abs.replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:').replace(',', '\\,')
+                        else:
+                            ass_path_escaped = ass_path_abs
+                    
+                    vf_filter_alt = f"ass={ass_path_escaped}"
+                    
+                    cmd_alt = [
+                        'ffmpeg',
+                        '-i', video_path,
+                        '-vf', vf_filter_alt,
+                        '-c:v', 'libx264',  # H.264 codec
+                        '-preset', 'medium',  # توازن بين السرعة والجودة
+                        '-crf', '23',  # جودة جيدة
+                        '-profile:v', 'high',  # High profile متوافق مع جميع الأجهزة
+                        '-level', '4.0',  # Level 4.0 متوافق مع معظم الأجهزة
+                        '-pix_fmt', 'yuv420p',  # متوافق مع جميع الأجهزة
+                        '-c:a', 'aac',  # AAC audio متوافق
+                        '-b:a', '128k',  # bitrate صوت جيد
+                        '-movflags', '+faststart',  # لضمان التشغيل السريع
+                        '-threads', '0',
+                        '-sub_charenc', 'UTF-8',  # تحديد ترميز الترجمة كـ UTF-8
+                        '-f', 'mp4',  # إجبار صيغة MP4
+                        '-y',
+                        output_path
+                    ]
+                    
+                    logger.info(f"Trying alternative command with ASS filter...")
+                    logger.info(f"ASS command: {' '.join(cmd_alt)}")
+                    process_alt = subprocess.run(cmd_alt, capture_output=True, timeout=600, text=True)
+                    
+                    if process_alt.returncode != 0:
+                        logger.error(f"ASS filter also failed (return code: {process_alt.returncode})")
+                        if process_alt.stderr:
+                            logger.error(f"ASS STDERR (first 2000 chars): {process_alt.stderr[:2000]}")
+                        if process_alt.stdout:
+                            logger.error(f"ASS STDOUT (first 2000 chars): {process_alt.stdout[:2000]}")
+                        logger.error(f"ASS filter: {vf_filter_alt}")
+                        return False
+                    else:
+                        if output_path.exists() and output_path.stat().st_size > 0:
+                            logger.info(f"Successfully merged with ASS filter. Output size: {output_path.stat().st_size} bytes")
+                            return True
+                        else:
+                            logger.error(f"ASS filter succeeded but output file not found or empty: {output_path}")
+                            return False
+                else:
+                    logger.error("Not an SRT file, cannot try ASS fallback")
+                    return False
             
-            return True
+            # التحقق من نجاح العملية
+            if output_path.exists():
+                file_size = output_path.stat().st_size
+                if file_size > 0:
+                    logger.info(f"Successfully merged subtitles using {'subtitles' if subtitle_path.endswith('.srt') else 'ass'} filter. Output size: {file_size} bytes")
+                    return True
+                else:
+                    logger.error(f"Output file exists but is empty (0 bytes): {output_path}")
+                    return False
+            else:
+                logger.error(f"FFmpeg succeeded (return code 0) but output file not found: {output_path}")
+                logger.error(f"Output directory exists: {output_dir.exists()}")
+                logger.error(f"Output directory is writable: {os.access(str(output_dir), os.W_OK)}")
+                return False
             
         except Exception as e:
             logger.error(f"Subtitle merge failed: {e}")
@@ -918,10 +1394,30 @@ class SmartMediaDownloader:
                 success = self._download_strategy_4(url, download_id, is_audio)
             
             if success:
+                # البحث عن الملف المحمّل
+                download_folder = Path(self.output_dir)
+                video_files = []
+                for file in download_folder.iterdir():
+                    if file.is_file():
+                        ext = file.suffix.lower()
+                        if ext in ['.mp4', '.webm', '.mkv', '.mp3', '.m4a', '.mov', '.avi', '.flv']:
+                            video_files.append((file, file.stat().st_mtime))
+                
+                downloaded_file = None
+                if video_files:
+                    video_files.sort(key=lambda x: x[1], reverse=True)
+                    downloaded_file = str(video_files[0][0])
+                    
+                    # تحويل إجباري إلى MP4 H.264 لضمان التوافق
+                    if downloaded_file and not downloaded_file.endswith('.mp3') and not downloaded_file.endswith('.m4a'):
+                        logger.info(f"Ensuring H.264 encoding for: {downloaded_file}")
+                        downloaded_file = self._ensure_mp4_h264(downloaded_file)
+                
                 download_progress[download_id] = {
                     'status': 'completed',
                     'percent': '100%',
-                    'message': 'تم التحميل بنجاح!'
+                    'message': 'تم التحميل بنجاح!',
+                    'file': downloaded_file
                 }
                 return {'success': True}
             else:
@@ -947,7 +1443,15 @@ class SmartMediaDownloader:
             if is_audio or format_cmd == 'audio':
                 cmd.extend(['-x', '--audio-format', 'mp3', '--audio-quality', '0'])
             else:
-                cmd.extend(['-f', format_cmd, '--merge-output-format', 'mp4'])
+                # إجبار MP4 H.264 متوافق مع جميع الأجهزة
+                # استخدام format selector يفضل H.264
+                # وإجبار إعادة الترميز إلى H.264
+                cmd.extend([
+                    '-f', format_cmd,
+                    '--merge-output-format', 'mp4',
+                    '--recode-video', 'mp4',  # إجبار إعادة الترميز إلى MP4
+                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart -strict experimental'
+                ])
             
             cmd.extend([
                 '-o', output_template,
@@ -974,7 +1478,13 @@ class SmartMediaDownloader:
             if is_audio or format_cmd == 'audio':
                 cmd.extend(['-x', '--audio-format', 'mp3'])
             else:
-                cmd.extend(['-f', format_cmd])
+                # إجبار MP4 H.264 متوافق مع جميع الأجهزة
+                cmd.extend([
+                    '-f', format_cmd,
+                    '--merge-output-format', 'mp4',
+                    '--recode-video', 'mp4',  # إجبار إعادة الترميز إلى MP4
+                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart -strict experimental'
+                ])
             
             cmd.extend(['-o', output_template, '--no-warnings', url])
             
@@ -996,7 +1506,13 @@ class SmartMediaDownloader:
             if is_audio:
                 cmd.extend(['-x', '--audio-format', 'mp3'])
             else:
-                cmd.extend(['-f', 'best[ext=mp4]/best'])
+                # إجبار MP4 H.264 متوافق مع جميع الأجهزة
+                cmd.extend([
+                    '-f', 'best[ext=mp4]/best',
+                    '--merge-output-format', 'mp4',
+                    '--recode-video', 'mp4',  # إجبار إعادة الترميز إلى MP4
+                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart -strict experimental'
+                ])
             
             cmd.extend(['-o', output_template, '--no-warnings', url])
             
@@ -1013,7 +1529,19 @@ class SmartMediaDownloader:
         try:
             output_template = str(self.output_dir / '%(title)s.%(ext)s')
             
-            cmd = ['yt-dlp', '-o', output_template, '--no-warnings', url]
+            cmd = ['yt-dlp']
+            
+            if is_audio:
+                cmd.extend(['-x', '--audio-format', 'mp3'])
+            else:
+                # إجبار MP4 H.264 متوافق مع جميع الأجهزة
+                cmd.extend([
+                    '--merge-output-format', 'mp4',
+                    '--recode-video', 'mp4',  # إجبار إعادة الترميز إلى MP4
+                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart -strict experimental'
+                ])
+            
+            cmd.extend(['-o', output_template, '--no-warnings', url])
             
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
                                       stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -1033,7 +1561,8 @@ class SmartMediaDownloader:
                         if '%' in part:
                             download_progress[download_id] = {
                                 'status': 'downloading',
-                                'percent': part
+                                'percent': part,
+                                'method': download_progress.get(download_id, {}).get('method', '')
                             }
                             break
             
@@ -1043,6 +1572,79 @@ class SmartMediaDownloader:
         except Exception as e:
             logger.error(f"Monitor failed: {e}")
             return False
+    
+    def _ensure_mp4_h264(self, video_path: str) -> str:
+        """تحويل الفيديو إلى MP4 H.264 متوافق مع جميع الأجهزة - إجباري دائماً"""
+        try:
+            video_file = Path(video_path)
+            
+            # إنشاء اسم ملف جديد
+            output_file = video_file.parent / f"{video_file.stem}_h264.mp4"
+            
+            # التحقق من codec الحالي
+            needs_conversion = True
+            try:
+                probe_cmd = [
+                    'ffprobe',
+                    '-v', 'error',
+                    '-select_streams', 'v:0',
+                    '-show_entries', 'stream=codec_name,codec_type',
+                    '-of', 'json',
+                    str(video_file)
+                ]
+                probe_result = subprocess.run(probe_cmd, capture_output=True, timeout=10, text=True)
+                if probe_result.returncode == 0:
+                    import json
+                    probe_data = json.loads(probe_result.stdout)
+                    streams = probe_data.get('streams', [])
+                    for stream in streams:
+                        if stream.get('codec_type') == 'video':
+                            codec = stream.get('codec_name', '').lower()
+                            # إذا كان H.264 بالفعل و MP4، استخدم الملف الأصلي
+                            if codec == 'h264' and video_file.suffix.lower() == '.mp4':
+                                logger.info(f"Video already H.264 MP4, skipping conversion: {video_file}")
+                                return str(video_file)
+                            break
+            except Exception as e:
+                logger.debug(f"Could not probe codec: {e}, will convert anyway")
+            
+            # تحويل إجباري إلى MP4 H.264
+            logger.info(f"Converting video to H.264 MP4: {video_file} -> {output_file}")
+            cmd = [
+                'ffmpeg',
+                '-i', str(video_file),
+                '-c:v', 'libx264',  # H.264 codec إجباري
+                '-profile:v', 'high',  # High profile متوافق
+                '-level', '4.0',  # Level 4.0 متوافق
+                '-pix_fmt', 'yuv420p',  # متوافق مع جميع الأجهزة
+                '-c:a', 'aac',  # AAC audio
+                '-b:a', '128k',  # bitrate صوت
+                '-movflags', '+faststart',  # لضمان التشغيل السريع
+                '-y',
+                str(output_file)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, timeout=600, text=True)
+            
+            if result.returncode == 0 and output_file.exists():
+                # حذف الملف الأصلي دائماً بعد التحويل الناجح
+                if output_file != video_file:
+                    try:
+                        video_file.unlink()
+                        logger.info(f"Deleted original file: {video_file}")
+                    except Exception as e:
+                        logger.warning(f"Could not delete original: {e}")
+                logger.info(f"Successfully converted to MP4 H.264: {output_file}")
+                return str(output_file)
+            else:
+                logger.error(f"Conversion failed: {result.stderr}")
+                # إذا فشل التحويل، حاول استخدام الملف الأصلي
+                return str(video_file)
+                
+        except Exception as e:
+            logger.error(f"Error converting video: {e}")
+            logger.error(traceback.format_exc())
+            return str(video_path)  # إرجاع الملف الأصلي في حالة الفشل
 
 # Initialize downloader
 downloader = SmartMediaDownloader()
@@ -1089,11 +1691,26 @@ def api_instant_translate():
             else:
                 format_cmd = quality
             
+            # إعدادات yt-dlp مع تحويل إجباري إلى MP4 H.264 متوافق
             ydl_opts = {
                 'format': format_cmd,
                 'outtmpl': str(download_folder / '%(title)s.%(ext)s'),
                 'quiet': True,
-                'no_warnings': True
+                'no_warnings': True,
+                'merge_output_format': 'mp4',
+                'recode_video': 'mp4',  # إجبار إعادة الترميز إلى MP4
+                'postprocessor_args': {
+                    'ffmpeg': [
+                        '-c:v', 'libx264',
+                        '-profile:v', 'high',
+                        '-level', '4.0',
+                        '-pix_fmt', 'yuv420p',
+                        '-c:a', 'aac',
+                        '-b:a', '128k',
+                        '-movflags', '+faststart',
+                        '-strict', 'experimental'
+                    ]
+                }
             }
             
             try:
@@ -1120,6 +1737,13 @@ def api_instant_translate():
                         'success': False,
                         'message': 'تم التحميل لكن الملف غير موجود'
                     }), 400
+                
+                # تحويل إجباري إلى MP4 H.264
+                if not filename.endswith('.mp3') and not filename.endswith('.m4a'):
+                    logger.info(f"Converting downloaded video to H.264: {filename}")
+                    converted_file = downloader._ensure_mp4_h264(filename)
+                    if converted_file != filename:
+                        filename = converted_file
                 
                 # استخدام ملف مؤقت
                 temp_file = download_folder / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -1195,20 +1819,25 @@ def api_instant_translate():
             
             result = whisper_transcriber.transcribe(audio_file, model, language)
             
-            # حفظ في ملف مؤقت
-            temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            # حفظ في ملف مؤقت (JSON للحفاظ على segments مع التوقيتات)
+            temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(result, f, ensure_ascii=False, indent=2)
             
+            # إرجاع النتيجة مع segments للتأكد من استخدام التوقيتات
             return jsonify({
                 'success': True,
                 'temp_file': temp_file.name,
+                'text': result.get('text', ''),
+                'language': result.get('language', language),
+                'segments': result.get('segments', []),
                 **result
             })
         
         elif step == 'translate':
             text = data.get('text')
             source_lang = data.get('source_lang', 'auto')
+            segments = data.get('segments')  # دعم ترجمة segments مع التوقيتات
             
             if not text:
                 return jsonify({
@@ -1223,18 +1852,53 @@ def api_instant_translate():
                 }), 503
             
             translator = GoogleTranslator(source=source_lang, target='ar')
-            translated = translator.translate(text)
             
-            # حفظ في ملف مؤقت
-            temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                f.write(translated)
-            
-            return jsonify({
-                'success': True,
-                'translated_text': translated,
-                'temp_file': temp_file.name
-            })
+            # إذا كانت هناك segments مع توقيتات، ترجم كل segment بشكل منفصل
+            if segments and isinstance(segments, list):
+                translated_segments = []
+                for seg in segments:
+                    seg_text = seg.get('text', '').strip()
+                    if seg_text:
+                        try:
+                            translated_text = translator.translate(seg_text)
+                            translated_segments.append({
+                                'start': seg.get('start', 0),
+                                'end': seg.get('end', 0),
+                                'text': translated_text
+                            })
+                        except Exception as e:
+                            logger.warning(f"Translation failed for segment: {e}")
+                            translated_segments.append({
+                                'start': seg.get('start', 0),
+                                'end': seg.get('end', 0),
+                                'text': seg_text
+                            })
+                
+                # حفظ segments المترجمة
+                temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    json.dump({'translated_segments': translated_segments, 'text': ' '.join([s['text'] for s in translated_segments])}, f, ensure_ascii=False, indent=2)
+                
+                return jsonify({
+                    'success': True,
+                    'translated_text': ' '.join([s['text'] for s in translated_segments]),
+                    'translated_segments': translated_segments,
+                    'temp_file': temp_file.name
+                })
+            else:
+                # ترجمة نص عادي
+                translated = translator.translate(text)
+                
+                # حفظ في ملف مؤقت
+                temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    f.write(translated)
+                
+                return jsonify({
+                    'success': True,
+                    'translated_text': translated,
+                    'temp_file': temp_file.name
+                })
         
         elif step == 'merge':
             logger.info(f"Merge step called with data keys: {list(data.keys())}")
@@ -1260,9 +1924,25 @@ def api_instant_translate():
                 temp_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_translated_file']
                 logger.info(f"Trying to read subtitle from temp file: {temp_path}")
                 if temp_path.exists():
-                    with open(temp_path, 'r', encoding='utf-8') as f:
-                        subtitle_text = f.read().strip()
-                        logger.info(f"Read subtitle_text from temp, length: {len(subtitle_text)}")
+                    try:
+                        # محاولة قراءة كـ JSON أولاً
+                        if temp_path.suffix == '.json':
+                            with open(temp_path, 'r', encoding='utf-8') as f:
+                                temp_data = json.load(f)
+                                # محاولة الحصول على النص المترجم
+                                subtitle_text = temp_data.get('translated_text') or temp_data.get('text', '')
+                                if not subtitle_text and temp_data.get('translated_segments'):
+                                    # بناء النص من segments
+                                    subtitle_text = ' '.join([s.get('text', '') for s in temp_data['translated_segments']])
+                                logger.info(f"Read subtitle_text from JSON temp, length: {len(subtitle_text)}")
+                        else:
+                            # قراءة كـ نص عادي
+                            with open(temp_path, 'r', encoding='utf-8') as f:
+                                subtitle_text = f.read().strip()
+                                logger.info(f"Read subtitle_text from temp, length: {len(subtitle_text)}")
+                    except Exception as e:
+                        logger.error(f"Error reading temp translated file: {e}")
+                        subtitle_text = None
                 else:
                     logger.warning(f"Temp translated file not found: {temp_path}")
             
@@ -1302,18 +1982,30 @@ def api_instant_translate():
                         'message': f'ملف الفيديو غير موجود: {video_file}'
                     }), 400
             
+            # التأكد من تحويل جميع القيم إلى الأنواع الصحيحة
             settings = {
-                'fontSize': data.get('fontSize', data.get('font_size', 24)),
-                'fontColor': data.get('fontColor', data.get('font_color', '#FFFFFF')),
-                'bgColor': data.get('bgColor', data.get('bg_color', '#000000')),
-                'bgOpacity': data.get('bgOpacity', data.get('bg_opacity', 180)),
-                'position': data.get('position', 'bottom'),
-                'fontFamily': data.get('fontFamily', data.get('font_name', 'Arial'))
+                'fontSize': int(data.get('fontSize', data.get('font_size', 24))),
+                'fontColor': str(data.get('fontColor', data.get('font_color', '#FFFFFF'))),
+                'bgColor': str(data.get('bgColor', data.get('bg_color', '#000000'))),
+                'bgOpacity': int(data.get('bgOpacity', data.get('bg_opacity', 180))),
+                'position': str(data.get('position', 'bottom')),
+                'fontFamily': str(data.get('fontFamily', data.get('font_name', 'Arial')))
             }
             
-            # إنشاء SRT من النص المترجم
+            # إنشاء SRT من النص المترجم مع التوقيتات الصحيحة
             # إذا كان النص ليس بصيغة SRT، نحوله إلى SRT
             if not subtitle_text.strip().startswith('1\n') and not subtitle_text.strip().startswith('WEBVTT'):
+                # محاولة استخدام segments المترجمة من ملف JSON إذا كانت متوفرة
+                translated_segments_data = None
+                if data.get('temp_translated_file'):
+                    temp_translated_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_translated_file']
+                    if temp_translated_path.exists() and temp_translated_path.suffix == '.json':
+                        try:
+                            with open(temp_translated_path, 'r', encoding='utf-8') as f:
+                                translated_segments_data = json.load(f)
+                        except:
+                            pass
+                
                 # محاولة استخدام segments من transcript إذا كانت متوفرة
                 transcript_data = None
                 if data.get('temp_transcript_file'):
@@ -1325,46 +2017,90 @@ def api_instant_translate():
                         except:
                             pass
                 
-                if transcript_data and transcript_data.get('segments'):
-                    # استخدام segments من Whisper مع النص المترجم
-                    segments = transcript_data['segments']
-                    translated_segments = subtitle_text.split('\n')
+                # الحالة المثلى: استخدام segments المترجمة مع التوقيتات
+                if translated_segments_data and translated_segments_data.get('translated_segments'):
+                    translated_segments = translated_segments_data['translated_segments']
                     
-                    srt_lines = []
-                    for i, seg in enumerate(segments):
-                        if i < len(translated_segments) and translated_segments[i].strip():
-                            start_str = SubtitleProcessor._format_time(seg.get('start', i * 3))
-                            end_str = SubtitleProcessor._format_time(seg.get('end', (i + 1) * 3))
-                            
-                            srt_lines.append(f"{i + 1}")
-                            srt_lines.append(f"{start_str} --> {end_str}")
-                            srt_lines.append(translated_segments[i].strip())
-                            srt_lines.append("")
-                    
-                    if srt_lines:
-                        subtitle_text = '\n'.join(srt_lines)
+                    # إذا كانت هناك segments أصلية، نحسن المزامنة
+                    if transcript_data and transcript_data.get('segments'):
+                        original_segments = transcript_data['segments']
+                        # تحسين المزامنة باستخدام word-level timestamps
+                        improved_segments = SubtitleProcessor.improve_sync_with_words(
+                            original_segments, 
+                            translated_segments
+                        )
                     else:
-                        # Fallback: تحويل النص العادي إلى SRT بسيط
-                        segments = subtitle_text.split('\n')
+                        improved_segments = translated_segments
+                    
+                    # تنظيف وترتيب segments قبل إنشاء SRT
+                    cleaned_segments = SubtitleProcessor.clean_and_merge_segments(improved_segments)
+                    
+                    # إنشاء SRT من segments المنظفة
+                    if cleaned_segments:
+                        subtitle_text = SubtitleProcessor.create_srt(cleaned_segments)
+                    else:
+                        subtitle_text = ""
+                
+                # الحالة الثانية: استخدام segments من transcript مع النص المترجم
+                elif transcript_data and transcript_data.get('segments'):
+                    segments = transcript_data['segments']
+                    translated_text = subtitle_text.strip()
+                    
+                    # استخدام التقسيم الذكي للترجمة مع تحسين المزامنة
+                    translated_segments = SubtitleProcessor.smart_split_translation(segments, translated_text)
+                    
+                    if translated_segments:
+                        # تحسين المزامنة باستخدام word-level timestamps إذا كانت متوفرة
+                        improved_segments = SubtitleProcessor.improve_sync_with_words(segments, translated_segments)
+                        
+                        # تنظيف وترتيب segments قبل إنشاء SRT
+                        cleaned_segments = SubtitleProcessor.clean_and_merge_segments(improved_segments)
+                        
+                        # إنشاء SRT من segments المنظفة
+                        if cleaned_segments:
+                            subtitle_text = SubtitleProcessor.create_srt(cleaned_segments)
+                        else:
+                            subtitle_text = ""
+                    else:
+                        # Fallback: تقسيم بسيط
+                        if '\n' in translated_text:
+                            translated_lines = [line.strip() for line in translated_text.split('\n') if line.strip()]
+                        else:
+                            words = translated_text.split()
+                            if len(words) > 0 and len(segments) > 0:
+                                words_per_segment = max(1, len(words) // len(segments))
+                                translated_lines = []
+                                for i in range(0, len(words), words_per_segment):
+                                    translated_lines.append(' '.join(words[i:i+words_per_segment]))
+                            else:
+                                translated_lines = [translated_text]
+                        
                         srt_lines = []
-                        for i, line in enumerate(segments, 1):
-                            if line.strip():
-                                start_time = (i - 1) * 3
-                                end_time = i * 3
-                                start_str = SubtitleProcessor._format_time(start_time)
-                                end_str = SubtitleProcessor._format_time(end_time)
+                        for i, seg in enumerate(segments):
+                            start = float(seg.get('start', 0))
+                            end = float(seg.get('end', start + 3))
+                            
+                            if i < len(translated_lines):
+                                text = translated_lines[i]
+                            else:
+                                text = seg.get('text', '').strip()
+                            
+                            if text:
+                                start_str = SubtitleProcessor._format_time(start)
+                                end_str = SubtitleProcessor._format_time(end)
                                 
-                                srt_lines.append(f"{i}")
+                                srt_lines.append(f"{len(srt_lines) // 4 + 1}")
                                 srt_lines.append(f"{start_str} --> {end_str}")
-                                srt_lines.append(line.strip())
+                                srt_lines.append(text)
                                 srt_lines.append("")
                         
-                        subtitle_text = '\n'.join(srt_lines)
+                        if srt_lines:
+                            subtitle_text = '\n'.join(srt_lines)
                 else:
                     # Fallback: تحويل النص العادي إلى SRT بسيط
-                    segments = subtitle_text.split('\n')
+                    lines = subtitle_text.split('\n')
                     srt_lines = []
-                    for i, line in enumerate(segments, 1):
+                    for i, line in enumerate(lines, 1):
                         if line.strip():
                             start_time = (i - 1) * 3
                             end_time = i * 3
@@ -1378,28 +2114,107 @@ def api_instant_translate():
                     
                     subtitle_text = '\n'.join(srt_lines)
             
-            # إنشاء SRT
+            # التأكد من أن subtitle_text غير فارغ
+            if not subtitle_text or not subtitle_text.strip():
+                logger.error("Subtitle text is empty!")
+                return jsonify({
+                    'success': False,
+                    'message': 'نص الترجمة فارغ. يرجى المحاولة مرة أخرى.'
+                }), 400
+            
+            # إنشاء ملف SRT نظيف ومنظم
+            # التأكد من أن subtitle_text هو SRT صحيح
+            if not subtitle_text.strip().startswith('1\n') and not subtitle_text.strip().startswith('WEBVTT'):
+                # إذا لم يكن SRT، تحويله
+                if subtitle_text.strip():
+                    # تقسيم إلى أسطر وإنشاء SRT بسيط
+                    lines = [line.strip() for line in subtitle_text.split('\n') if line.strip()]
+                    if lines:
+                        srt_lines = []
+                        for i, line in enumerate(lines, 1):
+                            start_time = (i - 1) * 3
+                            end_time = i * 3
+                            start_str = SubtitleProcessor._format_time(start_time)
+                            end_str = SubtitleProcessor._format_time(end_time)
+                            
+                            srt_lines.append(f"{i}")
+                            srt_lines.append(f"{start_str} --> {end_str}")
+                            srt_lines.append(line)
+                            srt_lines.append("")
+                        subtitle_text = '\n'.join(srt_lines)
+            
+            # التأكد مرة أخرى من أن subtitle_text غير فارغ بعد المعالجة
+            if not subtitle_text or not subtitle_text.strip():
+                logger.error("Subtitle text is empty after processing!")
+                return jsonify({
+                    'success': False,
+                    'message': 'فشل إنشاء ملف الترجمة. يرجى المحاولة مرة أخرى.'
+                }), 400
+            
+            # إنشاء ملف SRT بترميز UTF-8 مع BOM لدعم أفضل للعربية
             srt_path = Path(app.config['SUBTITLE_FOLDER']) / f"subtitle_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
-            with open(srt_path, 'w', encoding='utf-8') as f:
-                f.write(subtitle_text)
+            save_success = SubtitleProcessor.save_srt_file(subtitle_text, srt_path)
+            
+            if not save_success:
+                logger.error(f"Failed to save SRT file: {srt_path}")
+                return jsonify({
+                    'success': False,
+                    'message': 'فشل حفظ ملف الترجمة'
+                }), 500
+            
+            if not srt_path.exists():
+                logger.error(f"SRT file was not created: {srt_path}")
+                return jsonify({
+                    'success': False,
+                    'message': 'فشل إنشاء ملف الترجمة'
+                }), 500
+            
+            segment_count = len([s for s in subtitle_text.split('\n\n') if s.strip()])
+            logger.info(f"Created SRT file: {srt_path} with {segment_count} segments (UTF-8 with BOM)")
+            
+            # التأكد من أن ملف الفيديو موجود وقابل للقراءة
+            if not os.path.exists(video_file):
+                logger.error(f"Video file does not exist: {video_file}")
+                return jsonify({
+                    'success': False,
+                    'message': f'ملف الفيديو غير موجود: {video_file}'
+                }), 400
             
             # دمج
             output_file = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
             output_path = Path(app.config['OUTPUT_FOLDER']) / output_file
             
             logger.info(f"Merging subtitles: video={video_file}, srt={srt_path}, output={output_path}")
+            logger.info(f"Video file exists: {os.path.exists(video_file)}, SRT file exists: {srt_path.exists()}")
             
-            success = VideoProcessor.merge_subtitles(str(video_file), str(srt_path), str(output_path), settings)
-            
-            if success:
-                return jsonify({
-                    'success': True,
-                    'download_url': f'/download/{output_file}'
-                })
-            else:
+            try:
+                success = VideoProcessor.merge_subtitles(str(video_file), str(srt_path), str(output_path), settings)
+                
+                if success:
+                    if not output_path.exists():
+                        logger.error(f"Output file was not created: {output_path}")
+                        return jsonify({
+                            'success': False,
+                            'message': 'فشل إنشاء الفيديو النهائي'
+                        }), 500
+                    
+                    logger.info(f"Successfully merged subtitles. Output: {output_path}")
+                    return jsonify({
+                        'success': True,
+                        'download_url': f'/download/{output_file}'
+                    })
+                else:
+                    logger.error("merge_subtitles returned False")
+                    return jsonify({
+                        'success': False,
+                        'message': 'فشل دمج الترجمة مع الفيديو'
+                    }), 500
+            except Exception as e:
+                logger.error(f"Error in merge_subtitles: {e}")
+                logger.error(traceback.format_exc())
                 return jsonify({
                     'success': False,
-                    'message': 'فشل دمج الترجمة'
+                    'message': f'خطأ في دمج الترجمة: {str(e)}'
                 }), 500
         
         return jsonify({'success': False, 'message': 'خطوة غير صحيحة'})
@@ -1497,6 +2312,332 @@ def api_get_download_progress(download_id):
         'percent': '0%'
     })
     return jsonify(progress)
+
+
+@app.route('/api/transcribe', methods=['POST'])
+def api_transcribe():
+    """API للتحويل إلى نص من ملف"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'message': 'لم يتم رفع ملف'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'message': 'لم يتم اختيار ملف'}), 400
+        
+        # حفظ الملف
+        filename = secure_filename(file.filename)
+        file_path = Path(app.config['UPLOAD_FOLDER']) / filename
+        file.save(str(file_path))
+        
+        # استخراج الصوت إذا كان فيديو
+        audio_file = str(file_path)
+        if filename.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv')):
+            audio_file = str(file_path).rsplit('.', 1)[0] + '_audio.wav'
+            if not VideoProcessor.extract_audio(str(file_path), audio_file):
+                return jsonify({'success': False, 'message': 'فشل استخراج الصوت'}), 500
+        
+        # التحويل إلى نص
+        model = request.form.get('model', 'base')
+        language = request.form.get('language', 'auto')
+        
+        result = whisper_transcriber.transcribe(audio_file, model, language)
+        
+        # إنشاء ملف SRT من segments
+        srt_file = None
+        if result.get('segments'):
+            segments = result.get('segments', [])
+            srt_content = SubtitleProcessor.create_srt(segments)
+            
+            if srt_content:
+                srt_filename = f"transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
+                srt_path = Path(app.config['SUBTITLE_FOLDER']) / srt_filename
+                SubtitleProcessor.save_srt_file(srt_content, srt_path)
+                srt_file = srt_filename
+                logger.info(f"Created SRT file: {srt_path}")
+        
+        # حذف الملفات المؤقتة
+        try:
+            if audio_file != str(file_path):
+                os.remove(audio_file)
+            os.remove(str(file_path))
+        except:
+            pass
+        
+        return jsonify({
+            'success': True,
+            'text': result.get('text', ''),
+            'language': result.get('language', language),
+            'segments': result.get('segments', []),
+            'srt_file': srt_file,
+            'srt_url': f'/download/{srt_file}' if srt_file else None
+        })
+    
+    except Exception as e:
+        logger.error(f"Transcribe error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/transcribe-from-url', methods=['POST'])
+def api_transcribe_from_url():
+    """API للتحويل إلى نص من رابط"""
+    try:
+        data = request.json
+        url = data.get('url')
+        quality = data.get('quality', '720p')
+        model = data.get('model', 'base')
+        language = data.get('language', 'auto')
+        
+        if not url:
+            return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
+        
+        # تحميل الفيديو
+        download_folder = Path(app.config['DOWNLOAD_FOLDER'])
+        
+        # تحديد format command
+        if quality == 'best':
+            format_cmd = 'bestvideo+bestaudio/best'
+        elif quality == '720p':
+            format_cmd = 'bestvideo[height<=720]+bestaudio/best[height<=720]'
+        elif quality == '480p':
+            format_cmd = 'bestvideo[height<=480]+bestaudio/best[height<=480]'
+        elif quality == '1080p':
+            format_cmd = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]'
+        else:
+            format_cmd = quality
+        
+        # إعدادات yt-dlp مع تحويل إجباري إلى MP4 H.264 متوافق
+        ydl_opts = {
+            'format': format_cmd,
+            'outtmpl': str(download_folder / '%(title)s.%(ext)s'),
+            'quiet': True,
+            'no_warnings': True,
+            'merge_output_format': 'mp4',
+            'recode_video': 'mp4',  # إجبار إعادة الترميز إلى MP4
+            'postprocessor_args': {
+                'ffmpeg': [
+                    '-c:v', 'libx264',
+                    '-profile:v', 'high',
+                    '-level', '4.0',
+                    '-pix_fmt', 'yuv420p',
+                    '-c:a', 'aac',
+                    '-b:a', '128k',
+                    '-movflags', '+faststart',
+                    '-strict', 'experimental'
+                ]
+            }
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+        
+        # التأكد من أن الملف موجود
+        if not os.path.exists(filename):
+            video_files = []
+            for file in download_folder.iterdir():
+                if file.is_file():
+                    ext = file.suffix.lower()
+                    if ext in ['.mp4', '.webm', '.mkv', '.mov', '.avi', '.flv']:
+                        video_files.append((file, file.stat().st_mtime))
+            
+            if video_files:
+                video_files.sort(key=lambda x: x[1], reverse=True)
+                filename = str(video_files[0][0])
+        
+        if not os.path.exists(filename):
+            return jsonify({'success': False, 'message': 'فشل تحميل الفيديو'}), 400
+        
+        # تحويل إجباري إلى MP4 H.264 قبل المعالجة
+        if not filename.endswith('.mp3') and not filename.endswith('.m4a'):
+            logger.info(f"Converting video to H.264 before processing: {filename}")
+            converted_file = downloader._ensure_mp4_h264(filename)
+            if converted_file != filename:
+                filename = converted_file
+        
+        # استخراج الصوت
+        audio_file = filename.rsplit('.', 1)[0] + '_audio.wav'
+        if not VideoProcessor.extract_audio(filename, audio_file):
+            return jsonify({'success': False, 'message': 'فشل استخراج الصوت'}), 500
+        
+        # التحويل إلى نص
+        result = whisper_transcriber.transcribe(audio_file, model, language)
+        
+        # إنشاء ملف SRT من segments
+        srt_file = None
+        if result.get('segments'):
+            segments = result.get('segments', [])
+            srt_content = SubtitleProcessor.create_srt(segments)
+            
+            if srt_content:
+                srt_filename = f"transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
+                srt_path = Path(app.config['SUBTITLE_FOLDER']) / srt_filename
+                SubtitleProcessor.save_srt_file(srt_content, srt_path)
+                srt_file = srt_filename
+                logger.info(f"Created SRT file: {srt_path}")
+        
+        # حذف الملفات المؤقتة
+        try:
+            os.remove(audio_file)
+        except:
+            pass
+        
+        return jsonify({
+            'success': True,
+            'text': result.get('text', ''),
+            'language': result.get('language', language),
+            'segments': result.get('segments', []),
+            'srt_file': srt_file,
+            'srt_url': f'/download/{srt_file}' if srt_file else None
+        })
+    
+    except Exception as e:
+        logger.error(f"Transcribe from URL error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/translate', methods=['POST'])
+def api_translate():
+    """API للترجمة - يدعم النص وملفات SRT"""
+    try:
+        # التحقق من نوع الطلب (JSON أو FormData)
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            # رفع ملف SRT
+            if 'srt_file' not in request.files:
+                return jsonify({'success': False, 'message': 'لم يتم رفع ملف SRT'}), 400
+            
+            srt_file = request.files['srt_file']
+            if srt_file.filename == '':
+                return jsonify({'success': False, 'message': 'لم يتم اختيار ملف'}), 400
+            
+            source_lang = request.form.get('source_lang', 'auto')
+            target_lang = request.form.get('target_lang', 'ar')
+            
+            # حفظ الملف مؤقتاً
+            filename = secure_filename(srt_file.filename)
+            file_path = Path(app.config['UPLOAD_FOLDER']) / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}"
+            srt_file.save(str(file_path))
+            
+            # قراءة ملف SRT
+            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                srt_content = f.read()
+            
+            # تحليل ملف SRT
+            segments = []
+            lines = srt_content.strip().split('\n')
+            i = 0
+            
+            while i < len(lines):
+                if lines[i].strip().isdigit():
+                    if i + 2 < len(lines):
+                        timing = lines[i + 1].strip()
+                        text = lines[i + 2].strip()
+                        
+                        if ' --> ' in timing and text:
+                            start, end = timing.split(' --> ')
+                            # تحويل التوقيت إلى ثواني
+                            def time_to_seconds(time_str):
+                                time_str = time_str.replace(',', '.')
+                                parts = time_str.split(':')
+                                if len(parts) == 3:
+                                    hours = int(parts[0])
+                                    minutes = int(parts[1])
+                                    secs = float(parts[2])
+                                    return hours * 3600 + minutes * 60 + secs
+                                return 0.0
+                            
+                            start_sec = time_to_seconds(start)
+                            end_sec = time_to_seconds(end)
+                            
+                            segments.append({
+                                'start': start_sec,
+                                'end': end_sec,
+                                'text': text
+                            })
+                        i += 4
+                    else:
+                        i += 1
+                else:
+                    i += 1
+            
+            if not segments:
+                return jsonify({'success': False, 'message': 'ملف SRT فارغ أو غير صحيح'}), 400
+            
+            # ترجمة كل segment
+            if not TRANSLATOR_AVAILABLE:
+                return jsonify({'success': False, 'message': 'المترجم غير متوفر'}), 503
+            
+            translator = GoogleTranslator(source=source_lang, target=target_lang)
+            translated_segments = []
+            
+            for seg in segments:
+                try:
+                    translated_text = translator.translate(seg['text'])
+                    translated_segments.append({
+                        'start': seg['start'],
+                        'end': seg['end'],
+                        'text': translated_text
+                    })
+                except Exception as e:
+                    logger.warning(f"Translation failed for segment: {e}")
+                    translated_segments.append(seg)  # استخدام النص الأصلي في حالة الفشل
+            
+            # إنشاء ملف SRT مترجم
+            cleaned_segments = SubtitleProcessor.clean_and_merge_segments(translated_segments)
+            translated_srt_content = SubtitleProcessor.create_srt(cleaned_segments)
+            
+            if translated_srt_content:
+                srt_filename = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
+                srt_path = Path(app.config['SUBTITLE_FOLDER']) / srt_filename
+                SubtitleProcessor.save_srt_file(translated_srt_content, srt_path)
+                
+                # حذف الملف المؤقت
+                try:
+                    os.remove(str(file_path))
+                except:
+                    pass
+                
+                return jsonify({
+                    'success': True,
+                    'translated_text': ' '.join([s['text'] for s in translated_segments]),
+                    'translated_segments': translated_segments,
+                    'srt_file': srt_filename,
+                    'srt_url': f'/download/{srt_filename}',
+                    'source_lang': source_lang,
+                    'target_lang': target_lang
+                })
+            else:
+                return jsonify({'success': False, 'message': 'فشل إنشاء ملف SRT مترجم'}), 500
+        
+        else:
+            # ترجمة نص عادي
+            data = request.json
+            text = data.get('text')
+            source_lang = data.get('source_lang', 'auto')
+            target_lang = data.get('target_lang', 'ar')
+            
+            if not text:
+                return jsonify({'success': False, 'message': 'لا يوجد نص للترجمة'}), 400
+            
+            if not TRANSLATOR_AVAILABLE:
+                return jsonify({'success': False, 'message': 'المترجم غير متوفر'}), 503
+            
+            translator = GoogleTranslator(source=source_lang, target=target_lang)
+            translated = translator.translate(text)
+            
+            return jsonify({
+                'success': True,
+                'translated_text': translated,
+                'source_lang': source_lang,
+                'target_lang': target_lang
+            })
+    
+    except Exception as e:
+        logger.error(f"Translate error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 @app.route('/api/download', methods=['POST'])
@@ -1607,7 +2748,8 @@ def api_storage_info():
         folders = {
             'downloads': app.config['DOWNLOAD_FOLDER'],
             'outputs': app.config['OUTPUT_FOLDER'],
-            'subtitles': app.config['SUBTITLE_FOLDER']
+            'subtitles': app.config['SUBTITLE_FOLDER'],
+            'uploads': app.config['UPLOAD_FOLDER']
         }
         
         info = {}
@@ -1615,7 +2757,7 @@ def api_storage_info():
             folder_path = Path(folder)
             if folder_path.exists():
                 total_size = sum(f.stat().st_size for f in folder_path.rglob('*') if f.is_file())
-                file_count = len(list(folder_path.rglob('*')))
+                file_count = len([f for f in folder_path.rglob('*') if f.is_file()])
                 info[name] = {
                     'size': total_size,
                     'size_mb': round(total_size / (1024 * 1024), 2),
@@ -1626,6 +2768,81 @@ def api_storage_info():
         
         return jsonify({'success': True, 'folders': info})
     except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/cleanup', methods=['POST'])
+def api_cleanup():
+    """تنظيف الملفات المؤقتة والقديمة"""
+    try:
+        data = request.json or {}
+        cleanup_type = data.get('type', 'all')  # all, temp, old
+        
+        folders_to_clean = []
+        if cleanup_type == 'all':
+            folders_to_clean = [
+                app.config['DOWNLOAD_FOLDER'],
+                app.config['OUTPUT_FOLDER'],
+                app.config['SUBTITLE_FOLDER'],
+                app.config['UPLOAD_FOLDER']
+            ]
+        elif cleanup_type == 'temp':
+            folders_to_clean = [app.config['UPLOAD_FOLDER']]
+        elif cleanup_type == 'old':
+            # حذف الملفات الأقدم من 7 أيام
+            folders_to_clean = [
+                app.config['DOWNLOAD_FOLDER'],
+                app.config['OUTPUT_FOLDER'],
+                app.config['SUBTITLE_FOLDER']
+            ]
+        
+        deleted_count = 0
+        deleted_size = 0
+        current_time = time.time()
+        days_old = 7  # حذف الملفات الأقدم من 7 أيام
+        
+        for folder_path in folders_to_clean:
+            folder = Path(folder_path)
+            if not folder.exists():
+                continue
+            
+            for file_path in folder.rglob('*'):
+                if file_path.is_file():
+                    try:
+                        # حذف الملفات المؤقتة أو القديمة
+                        should_delete = False
+                        
+                        if cleanup_type == 'temp':
+                            # حذف الملفات المؤقتة فقط
+                            should_delete = file_path.name.startswith('temp_')
+                        elif cleanup_type == 'old':
+                            # حذف الملفات الأقدم من 7 أيام
+                            file_age = current_time - file_path.stat().st_mtime
+                            should_delete = file_age > (days_old * 24 * 3600)
+                        else:
+                            # حذف جميع الملفات
+                            should_delete = True
+                        
+                        if should_delete:
+                            file_size = file_path.stat().st_size
+                            file_path.unlink()
+                            deleted_count += 1
+                            deleted_size += file_size
+                    except Exception as e:
+                        logger.warning(f"Failed to delete {file_path}: {e}")
+                        continue
+        
+        return jsonify({
+            'success': True,
+            'deleted_count': deleted_count,
+            'deleted_size': deleted_size,
+            'deleted_size_mb': round(deleted_size / (1024 * 1024), 2),
+            'message': f'تم حذف {deleted_count} ملف ({round(deleted_size / (1024 * 1024), 2)} MB)'
+        })
+    
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
@@ -1718,22 +2935,55 @@ def api_merge_subtitle():
         temp_video_path = Path(app.config['UPLOAD_FOLDER']) / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{video_filename}"
         temp_subtitle_path = Path(app.config['UPLOAD_FOLDER']) / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{subtitle_filename}"
         
+        # التأكد من وجود المجلد
+        temp_video_path.parent.mkdir(parents=True, exist_ok=True)
+        
         video_file.save(str(temp_video_path))
         subtitle_file.save(str(temp_subtitle_path))
         
-        # قراءة إعدادات الترجمة
+        # التأكد من وجود الملفات
+        if not temp_video_path.exists():
+            return jsonify({
+                'success': False,
+                'message': 'فشل حفظ ملف الفيديو'
+            }), 500
+        
+        if not temp_subtitle_path.exists():
+            return jsonify({
+                'success': False,
+                'message': 'فشل حفظ ملف الترجمة'
+            }), 500
+        
+        # قراءة إعدادات الترجمة مع معالجة آمنة
+        try:
+            fontSize = request.form.get('fontSize', request.form.get('font_size', 24))
+            fontSize = int(fontSize) if fontSize else 24
+        except:
+            fontSize = 24
+        
+        try:
+            bgOpacity = request.form.get('bgOpacity', request.form.get('bg_opacity', 180))
+            bgOpacity = int(bgOpacity) if bgOpacity else 180
+        except:
+            bgOpacity = 180
+        
         settings = {
-            'fontSize': int(request.form.get('fontSize', request.form.get('font_size', 24))),
-            'fontColor': request.form.get('fontColor', request.form.get('font_color', '#FFFFFF')),
-            'bgColor': request.form.get('bgColor', request.form.get('bg_color', '#000000')),
-            'bgOpacity': int(request.form.get('bgOpacity', request.form.get('bg_opacity', 180))),
-            'position': request.form.get('position', 'bottom'),
-            'fontFamily': request.form.get('fontFamily', request.form.get('font_name', 'Arial'))
+            'fontSize': fontSize,
+            'fontColor': str(request.form.get('fontColor', request.form.get('font_color', '#FFFFFF'))),
+            'bgColor': str(request.form.get('bgColor', request.form.get('bg_color', '#000000'))),
+            'bgOpacity': bgOpacity,
+            'position': str(request.form.get('position', 'bottom')),
+            'fontFamily': str(request.form.get('fontFamily', request.form.get('font_name', 'Arial')))
         }
         
         # دمج
         output_file = f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
         output_path = Path(app.config['OUTPUT_FOLDER']) / output_file
+        
+        # التأكد من وجود مجلد الإخراج
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"Merging subtitle: video={temp_video_path}, subtitle={temp_subtitle_path}, output={output_path}")
         
         success = VideoProcessor.merge_subtitles(
             str(temp_video_path),
@@ -1744,26 +2994,36 @@ def api_merge_subtitle():
         
         # حذف الملفات المؤقتة
         try:
-            temp_video_path.unlink()
-            temp_subtitle_path.unlink()
-        except:
-            pass
+            if temp_video_path.exists():
+                temp_video_path.unlink()
+            if temp_subtitle_path.exists():
+                temp_subtitle_path.unlink()
+        except Exception as e:
+            logger.warning(f"Could not delete temp files: {e}")
         
         if success:
-            return jsonify({
-                'success': True,
-                'download_url': f'/download/{output_file}'
-            })
+            if output_path.exists():
+                return jsonify({
+                    'success': True,
+                    'download_url': f'/download/{output_file}'
+                })
+            else:
+                logger.error(f"Merge succeeded but output file not found: {output_path}")
+                return jsonify({
+                    'success': False,
+                    'message': 'فشل إنشاء الفيديو النهائي'
+                }), 500
         else:
+            logger.error("merge_subtitles returned False")
             return jsonify({
                 'success': False,
-                'message': 'فشل دمج الترجمة'
+                'message': 'فشل دمج الترجمة مع الفيديو'
             }), 500
             
     except Exception as e:
         logger.error(f"Merge subtitle error: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'message': str(e)}), 500
+        return jsonify({'success': False, 'message': f'خطأ في دمج الترجمة: {str(e)}'}), 500
 
 
 if __name__ == '__main__':
