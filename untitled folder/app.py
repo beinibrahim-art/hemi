@@ -142,93 +142,411 @@ download_progress = {}
 # =============================================================================
 
 class WhisperTranscriber:
-    """محسّن تحويل الصوت إلى نص"""
-    
+    """محسّن تحويل الصوت إلى نص - النسخة الاحترافية"""
+
+    _MAX_CHARS_PER_SEGMENT = 80
+    _MAX_DURATION_PER_SEGMENT = 5.0
+    _MIN_GAP_SECONDS = 0.05
+    _SILENCE_THRESHOLD = 0.5
+    _PADDING_SECONDS = 0.1
+
     def __init__(self):
         self.model_cache = {}
-    
-    def transcribe(self, audio_file: str, model_size: str = 'base', 
+
+    def transcribe(self, audio_file: str, model_size: str = 'base',
                    language: str = 'auto') -> Dict:
-        """تحويل الصوت إلى نص مع دعم Faster Whisper"""
-        
-        # محاولة Faster Whisper أولاً
+        """تحويل الصوت إلى نص مع دعم Faster Whisper والإعدادات المحسّنة"""
+
+        model_size = self._normalize_model_size(model_size)
+
         if FASTER_WHISPER_AVAILABLE:
             try:
                 return self._transcribe_faster(audio_file, model_size, language)
             except Exception as e:
                 logger.warning(f"Faster Whisper failed: {e}, falling back to standard")
-        
-        # استخدام Whisper العادي
+
         if WHISPER_AVAILABLE:
             return self._transcribe_standard(audio_file, model_size, language)
-        
+
         raise Exception("لا توجد مكتبة متاحة لتحويل الصوت إلى نص")
-    
+
+    def _normalize_model_size(self, model_size: str) -> str:
+        if not model_size:
+            return 'base'
+        normalized = model_size.lower()
+        mapping = {
+            'best': 'large-v2',
+            'large': 'large-v2',
+            'largev2': 'large-v2',
+            'large-v3': 'large-v3',
+            'medium': 'medium',
+            'small': 'small',
+            'tiny': 'tiny',
+        }
+        return mapping.get(normalized, model_size)
+
+    def _get_faster_model(self, model_size: str, device: str, compute_type: str):
+        cache_key = ('faster', model_size, device, compute_type)
+        model = self.model_cache.get(cache_key)
+        if model is None:
+            model = WhisperModel(model_size, device=device, compute_type=compute_type)
+            self.model_cache[cache_key] = model
+        return model
+
     def _transcribe_faster(self, audio_file: str, model_size: str, language: str) -> Dict:
-        """استخدام Faster Whisper"""
+        """استخدام Faster Whisper مع إعدادات محسّنة للدقة القصوى"""
         import torch
-        
+
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        compute_type = "float16" if device == "cuda" else "int8"
-        
-        model = WhisperModel(model_size, device=device, compute_type=compute_type)
-        
+        compute_type = "float16" if device == "cuda" else "float32"
+
+        model = self._get_faster_model(model_size, device, compute_type)
+
         language_code = None if language == 'auto' else language
-        
+        punctuation_prepend = "\"'“”¿([{-"
+        punctuation_append = "\"'.。,،!！?؟:：)]}、"
+
         segments, info = model.transcribe(
             audio_file,
             language=language_code,
-            beam_size=5,
+            beam_size=10,
+            best_of=5,
+            patience=2.0,
+            temperature=0.0,
             word_timestamps=True,
+            prepend_punctuations=punctuation_prepend,
+            append_punctuations=punctuation_append,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500)
+            vad_parameters=dict(
+                min_silence_duration_ms=500,
+                speech_pad_ms=400,
+            ),
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.6,
+            compression_ratio_threshold=2.4,
+            condition_on_previous_text=True,
         )
-        
+
         full_text = ""
         segments_list = []
-        
+
         for segment in segments:
             text = segment.text.strip()
-            if text:
-                full_text += text + " "
-                segments_list.append({
-                    'start': segment.start,
-                    'end': segment.end,
-                    'text': text,
-                    'words': [
-                        {
-                            'word': word.word,
-                            'start': word.start,
-                            'end': word.end
-                        }
-                        for word in getattr(segment, 'words', [])
-                    ]
+            if not text:
+                continue
+
+            full_text += text + " "
+            words_info = []
+            for word in getattr(segment, 'words', []) or []:
+                w_text = getattr(word, 'word', '').strip()
+                if not w_text:
+                    continue
+                words_info.append({
+                    'word': w_text,
+                    'start': round(getattr(word, 'start', segment.start), 3),
+                    'end': round(getattr(word, 'end', getattr(word, 'start', segment.start)), 3),
+                    'probability': round(getattr(word, 'probability', 0.0), 3)
                 })
-        
+
+            segment_info = {
+                'start': round(segment.start, 3),
+                'end': round(segment.end, 3),
+                'text': text,
+                'words': words_info,
+                'avg_logprob': getattr(segment, 'avg_logprob', 0.0),
+                'no_speech_prob': getattr(segment, 'no_speech_prob', 0.0),
+                'compression_ratio': getattr(segment, 'compression_ratio', 0.0),
+            }
+            segments_list.append(segment_info)
+
+        segments_list = self._post_process_segments(segments_list)
+
         return {
             'text': full_text.strip(),
             'language': getattr(info, 'language', language),
+            'language_probability': getattr(info, 'language_probability', 0.0),
+            'duration': getattr(info, 'duration', 0.0),
             'segments': segments_list
         }
-    
+
     def _transcribe_standard(self, audio_file: str, model_size: str, language: str) -> Dict:
-        """استخدام Whisper العادي"""
-        if model_size not in self.model_cache:
-            self.model_cache[model_size] = whisper.load_model(model_size)
-        
-        model = self.model_cache[model_size]
-        
+        """استخدام Whisper العادي مع إعدادات محسّنة"""
+        model = self.model_cache.get(model_size)
+        if model is None:
+            model = whisper.load_model(model_size)
+            self.model_cache[model_size] = model
+
+        punctuation_prepend = "\"'“”¿([{-"
+        punctuation_append = "\"'.。,،!！?؟:：)]}、"
+
         result = model.transcribe(
             audio_file,
             language=None if language == 'auto' else language,
-            word_timestamps=True
+            task='transcribe',
+            temperature=0.0,
+            beam_size=10,
+            best_of=5,
+            patience=2.0,
+            word_timestamps=True,
+            prepend_punctuations=punctuation_prepend,
+            append_punctuations=punctuation_append,
+            condition_on_previous_text=True,
+            compression_ratio_threshold=2.4,
+            logprob_threshold=-1.0,
+            no_speech_threshold=0.6,
         )
-        
+
+        segments_list = []
+        for segment in result.get('segments', []):
+            text = segment.get('text', '').strip()
+            if not text:
+                continue
+
+            words_info = []
+            for word in segment.get('words', []) or []:
+                w_text = word.get('word', '').strip()
+                if not w_text:
+                    continue
+                words_info.append({
+                    'word': w_text,
+                    'start': round(word.get('start', segment.get('start', 0.0)), 3),
+                    'end': round(word.get('end', word.get('start', segment.get('start', 0.0))), 3),
+                    'probability': round(word.get('probability', 0.0), 3)
+                })
+
+            segment_info = {
+                'start': round(segment.get('start', 0.0), 3),
+                'end': round(segment.get('end', segment.get('start', 0.0)), 3),
+                'text': text,
+                'words': words_info,
+                'avg_logprob': segment.get('avg_logprob', 0.0),
+                'no_speech_prob': segment.get('no_speech_prob', 0.0),
+                'compression_ratio': segment.get('compression_ratio', 0.0),
+            }
+            segments_list.append(segment_info)
+
+        segments_list = self._post_process_segments(segments_list)
+
         return {
-            'text': result['text'],
+            'text': result.get('text', '').strip(),
             'language': result.get('language', language),
-            'segments': result.get('segments', [])
+            'segments': segments_list
         }
+
+    def _post_process_segments(self, segments: List[Dict]) -> List[Dict]:
+        """
+        معالجة لاحقة لتحسين دقة التوقيتات:
+        1. احترام الفراغات والصمت
+        2. تصحيح التداخلات
+        3. إضافة معلومات السرعة والقراءة
+        4. تقسيم المقاطع الطويلة أو الثقيلة
+        """
+        if not segments:
+            return []
+
+        cleaned_segments: List[Dict] = []
+        prev_original_end = 0.0
+
+        for raw_segment in segments:
+            split_segments = self._split_segment_by_readability(
+                raw_segment,
+                max_chars=self._MAX_CHARS_PER_SEGMENT,
+                max_duration=self._MAX_DURATION_PER_SEGMENT
+            )
+
+            for segment in split_segments:
+                text = segment.get('text', '').strip()
+                if not text:
+                    continue
+
+                original_start = float(segment.get('start', 0.0))
+                original_end = float(segment.get('end', original_start + 0.1))
+
+                if original_start < prev_original_end:
+                    original_start = prev_original_end + self._MIN_GAP_SECONDS
+                if original_end <= original_start:
+                    original_end = original_start + max(segment.get('duration', 0.3), 0.3)
+
+                display_start = max(0.0, original_start - self._PADDING_SECONDS)
+                display_end = original_end + self._PADDING_SECONDS
+
+                words = self._filter_words_for_range(
+                    segment.get('words', []),
+                    original_start,
+                    original_end
+                )
+
+                improved_segment = {
+                    'start': round(display_start, 3),
+                    'end': round(display_end, 3),
+                    'original_start': round(original_start, 3),
+                    'original_end': round(original_end, 3),
+                    'text': text,
+                    'words': words,
+                    'avg_logprob': segment.get('avg_logprob', 0.0),
+                    'no_speech_prob': segment.get('no_speech_prob', 0.0),
+                    'compression_ratio': segment.get('compression_ratio', 0.0),
+                }
+
+                improved_segment = self._attach_readability_metrics(improved_segment)
+
+                if cleaned_segments:
+                    silence_gap = round(original_start - prev_original_end, 3)
+                    if silence_gap > self._SILENCE_THRESHOLD:
+                        cleaned_segments[-1]['silence_after'] = silence_gap
+
+                cleaned_segments.append(improved_segment)
+                prev_original_end = original_end
+
+        return cleaned_segments
+
+    def _split_segment_by_readability(self, segment: Dict, max_chars: int, max_duration: float) -> List[Dict]:
+        """تقسيم المقاطع الطويلة أو المزدحمة لضمان قراءة مريحة"""
+        text = segment.get('text', '').strip()
+        if not text:
+            return []
+
+        start = float(segment.get('start', segment.get('original_start', 0.0)))
+        end = float(segment.get('end', segment.get('original_end', start + 0.1)))
+        duration = max(end - start, 0.1)
+
+        if len(text) <= max_chars and duration <= max_duration:
+            return [dict(segment)]
+
+        sentences = [s.strip() for s in re.split(r'(?<=[.!؟?،;؛])\s+', text) if s.strip()]
+        if not sentences:
+            sentences = [text]
+
+        parts = []
+        total_chars = sum(len(sentence) for sentence in sentences)
+        current_start = start
+
+        for idx, sentence in enumerate(sentences):
+            proportion = len(sentence) / total_chars if total_chars else 1.0 / len(sentences)
+            allocated_duration = min(max_duration, max(0.5, duration * proportion))
+            current_end = min(end, current_start + allocated_duration)
+
+            part = dict(segment)
+            part['text'] = sentence
+            part['start'] = current_start
+            part['end'] = current_end
+            parts.append(part)
+
+            current_start = current_end
+            if current_start >= end:
+                break
+
+        if parts:
+            parts[-1]['end'] = end
+
+        refined_parts = []
+        for part in parts:
+            if len(part['text']) <= max_chars and (part['end'] - part['start']) <= max_duration:
+                refined_parts.append(part)
+            else:
+                refined_parts.extend(self._split_by_words(part, max_chars, max_duration))
+
+        return refined_parts
+
+    def _split_by_words(self, segment: Dict, max_chars: int, max_duration: float) -> List[Dict]:
+        """تقسيم إضافي باستخدام الكلمات عند الحاجة"""
+        text = segment.get('text', '').strip()
+        words = text.split()
+        if len(words) <= 1:
+            return [segment]
+
+        chunks: List[str] = []
+        current_words: List[str] = []
+        current_len = 0
+
+        for word in words:
+            addition = len(word) + (1 if current_words else 0)
+            if current_len + addition > max_chars and current_words:
+                chunks.append(' '.join(current_words))
+                current_words = [word]
+                current_len = len(word)
+            else:
+                current_words.append(word)
+                current_len += addition
+
+        if current_words:
+            chunks.append(' '.join(current_words))
+
+        start = float(segment.get('start', 0.0))
+        end = float(segment.get('end', start + 0.1))
+        total_duration = max(end - start, 0.1)
+        total_chars = sum(len(chunk) for chunk in chunks)
+        current_start = start
+        splitted_segments: List[Dict] = []
+
+        for idx, chunk in enumerate(chunks):
+            proportion = len(chunk) / total_chars if total_chars else 1.0 / len(chunks)
+            allocated_duration = min(max_duration, max(0.4, total_duration * proportion))
+            current_end = min(end, current_start + allocated_duration)
+
+            part = dict(segment)
+            part['text'] = chunk
+            part['start'] = current_start
+            part['end'] = current_end
+            splitted_segments.append(part)
+
+            current_start = current_end
+            if current_start >= end:
+                break
+
+        if splitted_segments:
+            splitted_segments[-1]['end'] = end
+
+        return splitted_segments
+
+    def _filter_words_for_range(self, words: List[Dict], start: float, end: float) -> List[Dict]:
+        """تصفية الكلمات لتناسب المدى الزمني الجديد"""
+        if not words:
+            return []
+
+        filtered = []
+        for word in words:
+            w_start = float(word.get('start', start))
+            w_end = float(word.get('end', w_start))
+
+            if w_end < start - 0.05 or w_start > end + 0.05:
+                continue
+
+            clipped = dict(word)
+            clipped['start'] = round(max(start, w_start), 3)
+            clipped['end'] = round(min(end, w_end), 3)
+            filtered.append(clipped)
+
+        return filtered
+
+    def _attach_readability_metrics(self, segment: Dict) -> Dict:
+        """إضافة مؤشرات السرعة والقراءة لكل مقطع"""
+        text = segment.get('text', '')
+        word_count = len([w for w in re.split(r'\s+', text) if w])
+        char_count = len(text)
+
+        duration = max(segment['original_end'] - segment['original_start'], 0.1)
+        cps = char_count / duration
+        wpm = (word_count / duration) * 60 if duration else 0.0
+
+        speed_flag = False
+        if cps < 12:
+            speed_class = 'slow'
+        elif cps <= 20:
+            speed_class = 'ideal'
+        else:
+            speed_class = 'fast'
+            speed_flag = True
+
+        segment['duration'] = round(duration, 3)
+        segment['word_count'] = word_count
+        segment['char_count'] = char_count
+        segment['cps'] = round(cps, 2)
+        segment['wpm'] = round(wpm, 1)
+        segment['speed_class'] = speed_class
+        segment['needs_review'] = speed_flag if speed_class == 'fast' else duration > 6.0
+
+        return segment
 
 whisper_transcriber = WhisperTranscriber()
 
