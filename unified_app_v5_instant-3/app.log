@@ -49,3 +49,12 @@
 2025-11-08 12:29:14,126 - INFO -  * Debugger PIN: 669-144-625
 2025-11-08 12:29:24,193 - INFO -  * Detected change in '/workspace/unified_app_v5_instant-3/unified_app_enhanced.py', reloading
 2025-11-08 12:29:24,230 - INFO -  * Restarting with stat
+2025-11-08 12:45:58,050 - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://172.30.0.2:5000
+2025-11-08 12:45:58,050 - INFO - [33mPress CTRL+C to quit[0m
+2025-11-08 12:45:58,050 - INFO -  * Restarting with stat
+2025-11-08 12:45:58,208 - WARNING -  * Debugger is active!
+2025-11-08 12:45:58,210 - INFO -  * Debugger PIN: 669-144-625
+2025-11-08 12:46:03,038 - INFO - 127.0.0.1 - - [08/Nov/2025 12:46:03] "GET / HTTP/1.1" 200 -
