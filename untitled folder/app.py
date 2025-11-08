@@ -1828,9 +1828,25 @@ def api_instant_translate():
                 temp_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_translated_file']
                 logger.info(f"Trying to read subtitle from temp file: {temp_path}")
                 if temp_path.exists():
-                    with open(temp_path, 'r', encoding='utf-8') as f:
-                        subtitle_text = f.read().strip()
-                        logger.info(f"Read subtitle_text from temp, length: {len(subtitle_text)}")
+                    try:
+                        # محاولة قراءة كـ JSON أولاً
+                        if temp_path.suffix == '.json':
+                            with open(temp_path, 'r', encoding='utf-8') as f:
+                                temp_data = json.load(f)
+                                # محاولة الحصول على النص المترجم
+                                subtitle_text = temp_data.get('translated_text') or temp_data.get('text', '')
+                                if not subtitle_text and temp_data.get('translated_segments'):
+                                    # بناء النص من segments
+                                    subtitle_text = ' '.join([s.get('text', '') for s in temp_data['translated_segments']])
+                                logger.info(f"Read subtitle_text from JSON temp, length: {len(subtitle_text)}")
+                        else:
+                            # قراءة كـ نص عادي
+                            with open(temp_path, 'r', encoding='utf-8') as f:
+                                subtitle_text = f.read().strip()
+                                logger.info(f"Read subtitle_text from temp, length: {len(subtitle_text)}")
+                    except Exception as e:
+                        logger.error(f"Error reading temp translated file: {e}")
+                        subtitle_text = None
                 else:
                     logger.warning(f"Temp translated file not found: {temp_path}")
             
@@ -2002,6 +2018,14 @@ def api_instant_translate():
                     
                     subtitle_text = '\n'.join(srt_lines)
             
+            # التأكد من أن subtitle_text غير فارغ
+            if not subtitle_text or not subtitle_text.strip():
+                logger.error("Subtitle text is empty!")
+                return jsonify({
+                    'success': False,
+                    'message': 'نص الترجمة فارغ. يرجى المحاولة مرة أخرى.'
+                }), 400
+            
             # إنشاء ملف SRT نظيف ومنظم
             # التأكد من أن subtitle_text هو SRT صحيح
             if not subtitle_text.strip().startswith('1\n') and not subtitle_text.strip().startswith('WEBVTT'):
@@ -2023,30 +2047,78 @@ def api_instant_translate():
                             srt_lines.append("")
                         subtitle_text = '\n'.join(srt_lines)
             
+            # التأكد مرة أخرى من أن subtitle_text غير فارغ بعد المعالجة
+            if not subtitle_text or not subtitle_text.strip():
+                logger.error("Subtitle text is empty after processing!")
+                return jsonify({
+                    'success': False,
+                    'message': 'فشل إنشاء ملف الترجمة. يرجى المحاولة مرة أخرى.'
+                }), 400
+            
             # إنشاء ملف SRT بترميز UTF-8 مع BOM لدعم أفضل للعربية
             srt_path = Path(app.config['SUBTITLE_FOLDER']) / f"subtitle_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
-            SubtitleProcessor.save_srt_file(subtitle_text, srt_path)
+            save_success = SubtitleProcessor.save_srt_file(subtitle_text, srt_path)
+            
+            if not save_success:
+                logger.error(f"Failed to save SRT file: {srt_path}")
+                return jsonify({
+                    'success': False,
+                    'message': 'فشل حفظ ملف الترجمة'
+                }), 500
+            
+            if not srt_path.exists():
+                logger.error(f"SRT file was not created: {srt_path}")
+                return jsonify({
+                    'success': False,
+                    'message': 'فشل إنشاء ملف الترجمة'
+                }), 500
             
             segment_count = len([s for s in subtitle_text.split('\n\n') if s.strip()])
             logger.info(f"Created SRT file: {srt_path} with {segment_count} segments (UTF-8 with BOM)")
+            
+            # التأكد من أن ملف الفيديو موجود وقابل للقراءة
+            if not os.path.exists(video_file):
+                logger.error(f"Video file does not exist: {video_file}")
+                return jsonify({
+                    'success': False,
+                    'message': f'ملف الفيديو غير موجود: {video_file}'
+                }), 400
             
             # دمج
             output_file = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
             output_path = Path(app.config['OUTPUT_FOLDER']) / output_file
             
             logger.info(f"Merging subtitles: video={video_file}, srt={srt_path}, output={output_path}")
+            logger.info(f"Video file exists: {os.path.exists(video_file)}, SRT file exists: {srt_path.exists()}")
             
-            success = VideoProcessor.merge_subtitles(str(video_file), str(srt_path), str(output_path), settings)
-            
-            if success:
-                return jsonify({
-                    'success': True,
-                    'download_url': f'/download/{output_file}'
-                })
-            else:
+            try:
+                success = VideoProcessor.merge_subtitles(str(video_file), str(srt_path), str(output_path), settings)
+                
+                if success:
+                    if not output_path.exists():
+                        logger.error(f"Output file was not created: {output_path}")
+                        return jsonify({
+                            'success': False,
+                            'message': 'فشل إنشاء الفيديو النهائي'
+                        }), 500
+                    
+                    logger.info(f"Successfully merged subtitles. Output: {output_path}")
+                    return jsonify({
+                        'success': True,
+                        'download_url': f'/download/{output_file}'
+                    })
+                else:
+                    logger.error("merge_subtitles returned False")
+                    return jsonify({
+                        'success': False,
+                        'message': 'فشل دمج الترجمة مع الفيديو'
+                    }), 500
+            except Exception as e:
+                logger.error(f"Error in merge_subtitles: {e}")
+                logger.error(traceback.format_exc())
                 return jsonify({
                     'success': False,
-                    'message': 'فشل دمج الترجمة'
+                    'message': f'خطأ في دمج الترجمة: {str(e)}'
                 }), 500
         
         return jsonify({'success': False, 'message': 'خطوة غير صحيحة'})
