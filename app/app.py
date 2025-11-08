@@ -1033,18 +1033,21 @@ def api_instant_translate():
                             'text': translated_segment_text.strip()
                         })
                 
+                # استخدام segments المترجمة مباشرة لإنشاء SRT
                 if segments_for_srt:
                     srt_content = SubtitleProcessor.create_srt(
-                        subtitle_text,
+                        '',  # نص فارغ لأننا نستخدم segments
                         duration=video_duration,
                         segments=segments_for_srt
                     )
                 else:
+                    # إذا لم تكن هناك segments، استخدم النص المترجم
                     srt_content = SubtitleProcessor.create_srt(
                         subtitle_text,
                         duration=video_duration
                     )
             else:
+                # إذا لم تكن هناك segments، استخدم النص المترجم فقط
                 srt_content = SubtitleProcessor.create_srt(
                     subtitle_text,
                     duration=video_duration
@@ -1220,6 +1223,110 @@ def api_get_video_thumbnail():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@app.route('/api/transcribe-from-url', methods=['POST'])
+def api_transcribe_from_url():
+    """تحويل الفيديو من رابط إلى نص"""
+    if not WHISPER_AVAILABLE:
+        return jsonify({'success': False, 'message': 'Whisper غير متوفر'}), 503
+    
+    try:
+        data = request.json
+        url = data.get('url')
+        language = data.get('language', 'auto')
+        model_size = data.get('model', 'base')
+        quality = data.get('quality', '720p')
+        
+        if not url:
+            return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
+        
+        # تحميل الفيديو أولاً
+        download_result = downloader.download(url, quality)
+        
+        if not download_result['success']:
+            return jsonify({'success': False, 'message': download_result['message']}), 400
+        
+        video_file = download_result['file']
+        if not os.path.isabs(video_file):
+            video_file = os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file))
+        
+        if not os.path.exists(video_file):
+            return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
+        
+        # استخراج الصوت
+        audio_file = video_file.rsplit('.', 1)[0] + '_audio.wav'
+        
+        cmd = [
+            'ffmpeg',
+            '-i', video_file,
+            '-vn',
+            '-acodec', 'pcm_s16le',
+            '-ar', '16000',
+            '-ac', '1',
+            '-threads', '0',
+            '-y',
+            audio_file
+        ]
+        
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"FFmpeg error: {e.stderr}")
+            return jsonify({'success': False, 'message': f'خطأ في استخراج الصوت: {e.stderr}'}), 500
+        except subprocess.TimeoutExpired:
+            return jsonify({'success': False, 'message': 'انتهت مهلة استخراج الصوت'}), 500
+        
+        # تحويل الصوت إلى نص
+        model = whisper.load_model(model_size)
+        
+        import torch
+        use_fp16 = torch.cuda.is_available()
+        
+        options = {
+            'language': None if language == 'auto' else language,
+            'task': 'transcribe',
+            'fp16': use_fp16,
+            'beam_size': 3,
+            'best_of': 2,
+            'temperature': 0.0,
+            'word_timestamps': True
+        }
+        
+        result = model.transcribe(audio_file, **options)
+        
+        # إنشاء ملف SRT
+        srt_content = SubtitleProcessor.create_srt(
+            result['text'],
+            duration=result.get('duration'),
+            segments=result.get('segments', [])
+        )
+        
+        srt_filename = f"{os.path.splitext(os.path.basename(video_file))[0]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
+        srt_path = os.path.join(app.config['SUBTITLE_FOLDER'], srt_filename)
+        
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            f.write(srt_content)
+        
+        # تنظيف ملف الصوت المؤقت
+        try:
+            if os.path.exists(audio_file):
+                os.remove(audio_file)
+        except:
+            pass
+        
+        return jsonify({
+            'success': True,
+            'text': result['text'],
+            'language': result.get('language', language),
+            'srt_file': srt_filename,
+            'segments': result.get('segments', [])
+        })
+    
+    except Exception as e:
+        logger.error(f"Transcribe from URL error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @app.route('/api/transcribe', methods=['POST'])
 def api_transcribe():
     """تحويل الصوت/الفيديو إلى نص"""
@@ -1258,7 +1365,12 @@ def api_transcribe():
         
         result = model.transcribe(filepath, **options)
         
-        srt_content = SubtitleProcessor.create_srt(result['text'])
+        # إنشاء ملف SRT مع segments
+        srt_content = SubtitleProcessor.create_srt(
+            result['text'],
+            duration=result.get('duration'),
+            segments=result.get('segments', [])
+        )
         srt_filename = f"{os.path.splitext(filename)[0]}.srt"
         srt_path = os.path.join(app.config['SUBTITLE_FOLDER'], srt_filename)
         
@@ -1271,7 +1383,8 @@ def api_transcribe():
             'success': True,
             'text': result['text'],
             'language': result.get('language', language),
-            'srt_file': srt_filename
+            'srt_file': srt_filename,
+            'segments': result.get('segments', [])
         })
     
     except Exception as e:
