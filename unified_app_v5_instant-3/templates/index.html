@@ -9,12 +9,34 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Cairo:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <!-- Bootstrap 5 CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Bootstrap Icons -->
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Bootstrap Icons (keeping for icons) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <!-- Animate.css -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css">
+    
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            DEFAULT: '#6366f1',
+                            dark: '#4f46e5',
+                            light: '#818cf8',
+                        },
+                        secondary: '#8b5cf6',
+                        accent: '#ec4899',
+                    },
+                    fontFamily: {
+                        sans: ['Cairo', 'Inter', 'system-ui', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
     
     <style>
         :root {
@@ -908,64 +930,76 @@
         }
     </style>
 </head>
-<body>
-    <div class="main-container">
+<body class="dark bg-gradient-to-br from-slate-950 via-purple-950/20 to-slate-900 min-h-screen text-white font-sans" dir="rtl">
+    <!-- Background Effects -->
+    <div class="fixed inset-0 -z-10">
+        <div class="absolute top-0 left-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl"></div>
+        <div class="absolute bottom-0 right-0 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl"></div>
+        <div class="absolute top-1/2 left-1/2 w-96 h-96 bg-pink-500/5 rounded-full blur-3xl"></div>
+    </div>
+    
+    <div class="max-w-7xl mx-auto px-5 py-8 min-h-screen">
         <!-- Header -->
-        <div class="header animate__animated animate__fadeInDown">
-            <h1>🎬 التطبيق المتكامل المحسن</h1>
-            <div class="version">الإصدار 4.0 - جميع الأدوات في مكان واحد</div>
+        <div class="text-center p-10 bg-slate-900/80 backdrop-blur-xl rounded-3xl mb-10 border border-slate-800/50 shadow-2xl animate__animated animate__fadeInDown relative overflow-hidden">
+            <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 animate-pulse"></div>
+            <h1 class="text-5xl font-black mb-4 bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent tracking-tight">
+                🎬 التطبيق المتكامل المحسن
+            </h1>
+            <div class="text-yellow-400 text-xl font-medium opacity-90">
+                الإصدار 4.0 - جميع الأدوات في مكان واحد
+            </div>
             
             <!-- Platform Badges -->
-            <div class="platform-badges">
-                <span class="platform-badge"><i class="bi bi-youtube"></i> YouTube</span>
-                <span class="platform-badge"><i class="bi bi-tiktok"></i> TikTok</span>
-                <span class="platform-badge"><i class="bi bi-instagram"></i> Instagram</span>
-                <span class="platform-badge"><i class="bi bi-twitter"></i> Twitter</span>
-                <span class="platform-badge"><i class="bi bi-facebook"></i> Facebook</span>
-                <span class="platform-badge"><i class="bi bi-play-circle"></i> +100 موقع</span>
+            <div class="flex flex-wrap gap-3 justify-center mt-6">
+                <span class="px-5 py-2 rounded-full text-sm font-medium bg-indigo-500/10 border border-indigo-500/30 flex items-center gap-2 backdrop-blur-sm hover:bg-indigo-500/20 hover:scale-105 transition-all">
+                    <i class="bi bi-youtube"></i> YouTube
+                </span>
+                <span class="px-5 py-2 rounded-full text-sm font-medium bg-indigo-500/10 border border-indigo-500/30 flex items-center gap-2 backdrop-blur-sm hover:bg-indigo-500/20 hover:scale-105 transition-all">
+                    <i class="bi bi-tiktok"></i> TikTok
+                </span>
+                <span class="px-5 py-2 rounded-full text-sm font-medium bg-indigo-500/10 border border-indigo-500/30 flex items-center gap-2 backdrop-blur-sm hover:bg-indigo-500/20 hover:scale-105 transition-all">
+                    <i class="bi bi-instagram"></i> Instagram
+                </span>
+                <span class="px-5 py-2 rounded-full text-sm font-medium bg-indigo-500/10 border border-indigo-500/30 flex items-center gap-2 backdrop-blur-sm hover:bg-indigo-500/20 hover:scale-105 transition-all">
+                    <i class="bi bi-twitter"></i> Twitter
+                </span>
+                <span class="px-5 py-2 rounded-full text-sm font-medium bg-indigo-500/10 border border-indigo-500/30 flex items-center gap-2 backdrop-blur-sm hover:bg-indigo-500/20 hover:scale-105 transition-all">
+                    <i class="bi bi-facebook"></i> Facebook
+                </span>
+                <span class="px-5 py-2 rounded-full text-sm font-medium bg-indigo-500/10 border border-indigo-500/30 flex items-center gap-2 backdrop-blur-sm hover:bg-indigo-500/20 hover:scale-105 transition-all">
+                    <i class="bi bi-play-circle"></i> +100 موقع
+                </span>
             </div>
         </div>
 
         <!-- Navigation Tabs -->
-        <ul class="nav nav-tabs justify-content-center" id="mainTabs" role="tablist">
-            <li class="nav-item">
-                <button class="nav-link active" id="instant-tab" data-bs-toggle="tab" data-bs-target="#instant" type="button">
-                    <i class="bi bi-lightning-fill"></i> ترجمة فورية
-                </button>
-            </li>
-            <li class="nav-item">
-                <button class="nav-link" id="download-tab" data-bs-toggle="tab" data-bs-target="#download" type="button">
-                    <i class="bi bi-download"></i> التحميل
-                </button>
-            </li>
-            <li class="nav-item">
-                <button class="nav-link" id="subtitle-tab" data-bs-toggle="tab" data-bs-target="#subtitle" type="button">
-                    <i class="bi bi-badge-cc"></i> محرر الترجمة
-                </button>
-            </li>
-            <li class="nav-item">
-                <button class="nav-link" id="transcribe-tab" data-bs-toggle="tab" data-bs-target="#transcribe" type="button">
-                    <i class="bi bi-mic"></i> تحويل لنص
-                </button>
-            </li>
-            <li class="nav-item">
-                <button class="nav-link" id="translate-tab" data-bs-toggle="tab" data-bs-target="#translate" type="button">
-                    <i class="bi bi-translate"></i> الترجمة
-                </button>
-            </li>
-            <li class="nav-item">
-                <button class="nav-link" id="batch-tab" data-bs-toggle="tab" data-bs-target="#batch" type="button">
-                    <i class="bi bi-stack"></i> معالجة دفعية
-                </button>
-            </li>
-        </ul>
+        <div class="bg-slate-900/80 backdrop-blur-xl rounded-2xl p-3 mb-8 border border-slate-800/50 shadow-xl flex flex-wrap justify-center gap-2">
+            <button class="px-6 py-3 rounded-xl font-semibold text-sm bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center gap-2" onclick="switchTab('instant')" id="instant-tab">
+                <i class="bi bi-lightning-fill"></i> ترجمة فورية
+            </button>
+            <button class="px-6 py-3 rounded-xl font-semibold text-sm bg-slate-800/50 text-slate-300 hover:bg-slate-700/50 hover:text-white transition-all flex items-center gap-2" onclick="switchTab('download')" id="download-tab">
+                <i class="bi bi-download"></i> التحميل
+            </button>
+            <button class="px-6 py-3 rounded-xl font-semibold text-sm bg-slate-800/50 text-slate-300 hover:bg-slate-700/50 hover:text-white transition-all flex items-center gap-2" onclick="switchTab('subtitle')" id="subtitle-tab">
+                <i class="bi bi-badge-cc"></i> محرر الترجمة
+            </button>
+            <button class="px-6 py-3 rounded-xl font-semibold text-sm bg-slate-800/50 text-slate-300 hover:bg-slate-700/50 hover:text-white transition-all flex items-center gap-2" onclick="switchTab('transcribe')" id="transcribe-tab">
+                <i class="bi bi-mic"></i> تحويل لنص
+            </button>
+            <button class="px-6 py-3 rounded-xl font-semibold text-sm bg-slate-800/50 text-slate-300 hover:bg-slate-700/50 hover:text-white transition-all flex items-center gap-2" onclick="switchTab('translate')" id="translate-tab">
+                <i class="bi bi-translate"></i> الترجمة
+            </button>
+            <button class="px-6 py-3 rounded-xl font-semibold text-sm bg-slate-800/50 text-slate-300 hover:bg-slate-700/50 hover:text-white transition-all flex items-center gap-2" onclick="switchTab('batch')" id="batch-tab">
+                <i class="bi bi-stack"></i> معالجة دفعية
+            </button>
+        </div>
 
         <!-- Tab Contents -->
         <div class="tab-content" id="mainTabContent">
             
             <!-- Instant Translation Tab -->
-            <div class="tab-pane fade show active" id="instant" role="tabpanel">
-                <div class="card-custom">
+            <div class="tab-pane fade show active" id="instant" role="tabpanel" style="display: block;">
+                <div class="bg-slate-900/80 backdrop-blur-xl rounded-3xl p-8 border border-slate-800/50 shadow-2xl">
                     <div class="text-center mb-4" style="padding: 30px; background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(239, 68, 68, 0.1)); border-radius: 20px;">
                         <h2 style="background: linear-gradient(135deg, #f59e0b, #ef4444); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
                             <i class="bi bi-magic"></i> الترجمة الذكية بضغطة واحدة
@@ -2805,6 +2839,35 @@
             progressBar.style.width = percentage + '%';
             progressBar.textContent = Math.round(percentage) + '%';
             document.getElementById('batchStatus').textContent = message;
+        }
+
+        // === TAB SWITCHING FUNCTION ===
+        function switchTab(tabName) {
+            // Hide all tab panes
+            document.querySelectorAll('.tab-pane').forEach(pane => {
+                pane.classList.remove('show', 'active');
+                pane.style.display = 'none';
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('[id$="-tab"]').forEach(tab => {
+                tab.classList.remove('bg-gradient-to-r', 'from-indigo-500', 'to-purple-500', 'text-white', 'shadow-lg');
+                tab.classList.add('bg-slate-800/50', 'text-slate-300');
+            });
+            
+            // Show selected tab pane
+            const selectedPane = document.getElementById(tabName);
+            if (selectedPane) {
+                selectedPane.classList.add('show', 'active');
+                selectedPane.style.display = 'block';
+            }
+            
+            // Activate selected tab button
+            const selectedTab = document.getElementById(tabName + '-tab');
+            if (selectedTab) {
+                selectedTab.classList.remove('bg-slate-800/50', 'text-slate-300');
+                selectedTab.classList.add('bg-gradient-to-r', 'from-indigo-500', 'to-purple-500', 'text-white', 'shadow-lg');
+            }
         }
 
         // === HELPER FUNCTIONS ===

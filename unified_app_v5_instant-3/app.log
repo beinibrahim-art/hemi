@@ -72,3 +72,4 @@
 2025-11-08 12:47:08,653 - INFO -  * Debugger PIN: 669-144-625
 2025-11-08 12:47:17,522 - ERROR - Missing 'step' parameter. Received data: {'test': 'data'}
 2025-11-08 12:47:17,522 - INFO - 127.0.0.1 - - [08/Nov/2025 12:47:17] "[31m[1mPOST /api/instant-translate HTTP/1.1[0m" 400 -
+2025-11-08 12:52:30,425 - INFO -  * Detected change in '/workspace/unified_app_v5_instant-3/unified_app_enhanced.py', reloading

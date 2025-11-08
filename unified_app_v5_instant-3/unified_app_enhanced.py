@@ -919,9 +919,30 @@ def api_instant_translate():
             
             if result['success']:
                 # Store file path in session or temp storage
-                session['video_file'] = result['file']
-                # Return full path for thumbnail extraction
-                full_path = result['file'] if os.path.isabs(result['file']) else os.path.join(app.config['DOWNLOAD_FOLDER'], result['file'])
+                video_file = result['file']
+                
+                # Normalize path - handle cases where path might already include DOWNLOAD_FOLDER
+                if os.path.isabs(video_file):
+                    full_path = video_file
+                else:
+                    # Check if path already starts with downloads folder name
+                    if video_file.startswith('downloads/') or video_file.startswith('downloads\\'):
+                        # Remove the prefix and join properly
+                        video_file = video_file.replace('downloads/', '').replace('downloads\\', '')
+                    full_path = os.path.join(app.config['DOWNLOAD_FOLDER'], video_file)
+                
+                # Normalize the path to handle any double slashes or issues
+                full_path = os.path.normpath(full_path)
+                
+                # Verify file exists
+                if not os.path.exists(full_path):
+                    # Try to find the file
+                    if os.path.exists(video_file):
+                        full_path = os.path.abspath(video_file)
+                    elif os.path.exists(os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file))):
+                        full_path = os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file))
+                
+                session['video_file'] = full_path
                 return jsonify({
                     'success': True,
                     'file': full_path,
@@ -934,18 +955,30 @@ def api_instant_translate():
             # Step 2: Extract audio from video
             video_file = data.get('video_file') or session.get('video_file')
             
-            # Handle relative paths
-            if video_file and not os.path.isabs(video_file):
-                # Try different possible locations
-                possible_paths = [
-                    os.path.join(app.config['DOWNLOAD_FOLDER'], video_file),
-                    os.path.join(app.config['UPLOAD_FOLDER'], video_file),
-                    video_file
-                ]
-                for path in possible_paths:
-                    if os.path.exists(path):
-                        video_file = path
-                        break
+            # Normalize and resolve path
+            if video_file:
+                # If it's already absolute, use it
+                if os.path.isabs(video_file):
+                    video_file = os.path.normpath(video_file)
+                else:
+                    # Remove any 'downloads/' prefix if present
+                    normalized = video_file.replace('downloads/', '').replace('downloads\\', '')
+                    
+                    # Try different possible locations
+                    possible_paths = [
+                        os.path.join(app.config['DOWNLOAD_FOLDER'], normalized),
+                        os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file)),
+                        os.path.join(app.config['UPLOAD_FOLDER'], normalized),
+                        os.path.join(app.config['UPLOAD_FOLDER'], os.path.basename(video_file)),
+                        video_file,
+                        normalized
+                    ]
+                    
+                    for path in possible_paths:
+                        abs_path = os.path.abspath(path)
+                        if os.path.exists(abs_path):
+                            video_file = abs_path
+                            break
             
             if not video_file or not os.path.exists(video_file):
                 logger.error(f"Video file not found: {video_file}")
