@@ -801,28 +801,30 @@ class VideoProcessor:
             # استخدام المسار المطلق مباشرة
             subtitle_path_abs = str(Path(subtitle_path).resolve())
             
-            # طريقة أبسط: استخدام subtitles filter مع المسار المطلق
-            # على Linux/Mac، يمكن استخدام المسار مباشرة إذا لم يكن فيه مسافات
-            # إذا كان فيه مسافات، نستخدم escape بسيط
-            
-            # التحقق من وجود مسافات في المسار
-            has_spaces = ' ' in subtitle_path_abs
-            has_special = any(c in subtitle_path_abs for c in ['[', ']', ':', ','])
-            
-            if platform.system() == 'Windows':
-                # على Windows، تحويل المسار إلى format مناسب
-                if has_spaces or has_special:
-                    subtitle_path_escaped = subtitle_path_abs.replace('\\', '/').replace(':', '\\:')
+            # لـ ffmpeg filters، نحتاج إلى تهريب خاص للأحرف: : , [ ] \
+            def escape_ffmpeg_path(path):
+                """تهريب مسار لاستخدامه في ffmpeg filter"""
+                # على Windows، تحويل backslashes إلى forward slashes أولاً
+                if platform.system() == 'Windows':
+                    # تحويل C:\path\to\file إلى C:/path/to/file
+                    escaped = path.replace('\\', '/')
                 else:
-                    subtitle_path_escaped = subtitle_path_abs.replace('\\', '/')
-            else:
-                # على Linux/Mac
-                if has_spaces or has_special:
-                    # escape المسافات والأحرف الخاصة
-                    subtitle_path_escaped = subtitle_path_abs.replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:').replace(',', '\\,')
-                else:
-                    # استخدام المسار مباشرة
-                    subtitle_path_escaped = subtitle_path_abs
+                    escaped = path
+                
+                # تهريب الأحرف الخاصة في ffmpeg filter syntax
+                # : يجب أن يكون \: (مهم جداً في Windows paths مثل C:)
+                # , يجب أن يكون \,
+                # [ يجب أن يكون \[
+                # ] يجب أن يكون \]
+                # \ يجب أن يكون \\ (إذا بقي أي backslash)
+                escaped = escaped.replace('\\', '\\\\')  # تهريب أي backslash متبقي
+                escaped = escaped.replace(':', '\\:')
+                escaped = escaped.replace(',', '\\,')
+                escaped = escaped.replace('[', '\\[')
+                escaped = escaped.replace(']', '\\]')
+                return escaped
+            
+            subtitle_path_escaped = escape_ffmpeg_path(subtitle_path_abs)
             
             # دمج مع الفيديو
             # استخدام subtitles filter لـ SRT (أفضل للترجمة الفورية)
@@ -883,15 +885,16 @@ class VideoProcessor:
             if process.returncode != 0:
                 logger.error(f"FFmpeg failed with return code: {process.returncode}")
                 logger.error(f"Full command: {' '.join(cmd)}")
-                if process.stderr:
-                    logger.error(f"STDERR (first 2000 chars): {process.stderr[:2000]}")
-                if process.stdout:
-                    logger.error(f"STDOUT (first 2000 chars): {process.stdout[:2000]}")
                 logger.error(f"Video path (exists: {os.path.exists(video_path)}): {video_path}")
-                logger.error(f"Subtitle path (exists: {os.path.exists(subtitle_path)}): {subtitle_path}")
-                logger.error(f"Subtitle path escaped: {subtitle_path_escaped}")
+                logger.error(f"Subtitle path (original, exists: {os.path.exists(subtitle_path)}): {subtitle_path}")
+                logger.error(f"Subtitle path (absolute): {subtitle_path_abs}")
+                logger.error(f"Subtitle path (escaped): {subtitle_path_escaped}")
                 logger.error(f"Video filter: {vf_filter}")
                 logger.error(f"Output path: {output_path}")
+                if process.stderr:
+                    logger.error(f"STDERR (first 3000 chars): {process.stderr[:3000]}")
+                if process.stdout:
+                    logger.error(f"STDOUT (first 3000 chars): {process.stdout[:3000]}")
                 
                 # إذا كان يستخدم subtitles filter وفشل، جرب ass filter
                 if subtitle_path.endswith('.srt'):
@@ -909,19 +912,25 @@ class VideoProcessor:
                     
                     # Escape المسار بشكل صحيح للـ ASS
                     ass_path_abs = str(Path(ass_path).resolve())
-                    has_spaces = ' ' in ass_path_abs
-                    has_special = any(c in ass_path_abs for c in ['[', ']', ':', ','])
                     
-                    if platform.system() == 'Windows':
-                        if has_spaces or has_special:
-                            ass_path_escaped = ass_path_abs.replace('\\', '/').replace(':', '\\:')
+                    # استخدام نفس دالة التهريب
+                    def escape_ffmpeg_path(path):
+                        """تهريب مسار لاستخدامه في ffmpeg filter"""
+                        # على Windows، تحويل backslashes إلى forward slashes أولاً
+                        if platform.system() == 'Windows':
+                            escaped = path.replace('\\', '/')
                         else:
-                            ass_path_escaped = ass_path_abs.replace('\\', '/')
-                    else:
-                        if has_spaces or has_special:
-                            ass_path_escaped = ass_path_abs.replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:').replace(',', '\\,')
-                        else:
-                            ass_path_escaped = ass_path_abs
+                            escaped = path
+                        
+                        # تهريب الأحرف الخاصة
+                        escaped = escaped.replace('\\', '\\\\')
+                        escaped = escaped.replace(':', '\\:')
+                        escaped = escaped.replace(',', '\\,')
+                        escaped = escaped.replace('[', '\\[')
+                        escaped = escaped.replace(']', '\\]')
+                        return escaped
+                    
+                    ass_path_escaped = escape_ffmpeg_path(ass_path_abs)
                     
                     vf_filter_alt = f"ass={ass_path_escaped}"
                     
@@ -951,11 +960,14 @@ class VideoProcessor:
                     
                     if process_alt.returncode != 0:
                         logger.error(f"ASS filter also failed (return code: {process_alt.returncode})")
-                        if process_alt.stderr:
-                            logger.error(f"ASS STDERR (first 2000 chars): {process_alt.stderr[:2000]}")
-                        if process_alt.stdout:
-                            logger.error(f"ASS STDOUT (first 2000 chars): {process_alt.stdout[:2000]}")
                         logger.error(f"ASS filter: {vf_filter_alt}")
+                        logger.error(f"ASS path (original): {ass_path_abs}")
+                        logger.error(f"ASS path (escaped): {ass_path_escaped}")
+                        logger.error(f"ASS file exists: {os.path.exists(ass_path_abs)}")
+                        if process_alt.stderr:
+                            logger.error(f"ASS STDERR (first 3000 chars): {process_alt.stderr[:3000]}")
+                        if process_alt.stdout:
+                            logger.error(f"ASS STDOUT (first 3000 chars): {process_alt.stdout[:3000]}")
                         return False
                     else:
                         if output_path.exists() and output_path.stat().st_size > 0:
