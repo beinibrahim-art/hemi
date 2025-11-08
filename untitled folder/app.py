@@ -442,20 +442,98 @@ class SubtitleProcessor:
     
     @staticmethod
     def create_srt(segments: List[Dict]) -> str:
-        """إنشاء ملف SRT من segments"""
+        """إنشاء ملف SRT من segments مع تنظيف وترتيب"""
+        if not segments:
+            return ""
+        
+        # تنظيف وترتيب segments
+        cleaned_segments = SubtitleProcessor.clean_and_merge_segments(segments)
+        
         srt_lines = []
         
-        for i, seg in enumerate(segments, 1):
-            start = SubtitleProcessor._format_time(seg['start'])
-            end = SubtitleProcessor._format_time(seg['end'])
-            text = seg['text']
+        for i, seg in enumerate(cleaned_segments, 1):
+            start = float(seg.get('start', 0))
+            end = float(seg.get('end', start + 3))
+            text = seg.get('text', '').strip()
+            
+            # التأكد من أن التوقيتات منطقية
+            if end <= start:
+                end = start + 1.0  # مدة دنيا ثانية واحدة
+            
+            # التأكد من أن النص غير فارغ
+            if not text:
+                continue
+            
+            start_str = SubtitleProcessor._format_time(start)
+            end_str = SubtitleProcessor._format_time(end)
             
             srt_lines.append(f"{i}")
-            srt_lines.append(f"{start} --> {end}")
+            srt_lines.append(f"{start_str} --> {end_str}")
             srt_lines.append(text)
             srt_lines.append("")
         
         return '\n'.join(srt_lines)
+    
+    @staticmethod
+    def clean_and_merge_segments(segments: List[Dict]) -> List[Dict]:
+        """
+        تنظيف ودمج segments المتداخلة والمكررة
+        يزيل التكرار ويضمن التوقيتات المنطقية
+        """
+        if not segments:
+            return []
+        
+        # ترتيب segments حسب وقت البداية
+        sorted_segments = sorted(segments, key=lambda x: float(x.get('start', 0)))
+        
+        cleaned = []
+        last_end = 0.0
+        
+        for seg in sorted_segments:
+            start = float(seg.get('start', 0))
+            end = float(seg.get('end', start + 3))
+            text = seg.get('text', '').strip()
+            
+            # تخطي segments فارغة
+            if not text:
+                continue
+            
+            # التأكد من أن التوقيتات منطقية
+            if end <= start:
+                end = start + max(1.0, len(text) * 0.1)  # مدة بناءً على طول النص
+            
+            # إذا كان segment متداخل مع السابق، دمجهما
+            if cleaned and start < last_end:
+                # دمج مع segment السابق
+                prev_seg = cleaned[-1]
+                prev_text = prev_seg.get('text', '').strip()
+                
+                # إذا كان النص مختلف، أضفه
+                if text != prev_text:
+                    # تمديد نهاية segment السابق قليلاً
+                    prev_seg['end'] = min(start + 0.5, end)
+                    # بدء segment جديد بعد السابق مباشرة
+                    start = prev_seg['end'] + 0.1
+                    cleaned.append({
+                        'start': start,
+                        'end': end,
+                        'text': text
+                    })
+                    last_end = end
+            else:
+                # إضافة segment جديد
+                # التأكد من وجود فجوة صغيرة بين segments
+                if cleaned and start < last_end + 0.1:
+                    start = last_end + 0.1
+                
+                cleaned.append({
+                    'start': start,
+                    'end': end,
+                    'text': text
+                })
+                last_end = end
+        
+        return cleaned
     
     @staticmethod
     def _format_time(seconds: float) -> str:
@@ -596,18 +674,26 @@ class VideoProcessor:
             subtitle_path = str(Path(subtitle_path).resolve())
             output_path = str(Path(output_path).resolve())
             
-            # إنشاء ملف ASS
+            # استخدام SRT مباشرة إذا كان متوفراً، أو تحويله إلى ASS
+            # SRT أفضل للترجمة الفورية لأنه أبسط وأكثر دقة
+            use_srt_directly = True  # استخدام SRT مباشرة
+            
             if subtitle_path.endswith('.srt'):
-                with open(subtitle_path, 'r', encoding='utf-8') as f:
-                    srt_content = f.read()
-                
-                ass_content = SubtitleProcessor.create_ass(srt_content, settings)
-                ass_path = subtitle_path.replace('.srt', '.ass')
-                
-                with open(ass_path, 'w', encoding='utf-8') as f:
-                    f.write(ass_content)
-                
-                subtitle_path = str(Path(ass_path).resolve())
+                if use_srt_directly:
+                    # استخدام SRT مباشرة مع subtitles filter (أفضل للترجمة الفورية)
+                    subtitle_path = str(Path(subtitle_path).resolve())
+                else:
+                    # تحويل إلى ASS للتحكم الكامل في التنسيق
+                    with open(subtitle_path, 'r', encoding='utf-8') as f:
+                        srt_content = f.read()
+                    
+                    ass_content = SubtitleProcessor.create_ass(srt_content, settings)
+                    ass_path = subtitle_path.replace('.srt', '.ass')
+                    
+                    with open(ass_path, 'w', encoding='utf-8') as f:
+                        f.write(ass_content)
+                    
+                    subtitle_path = str(Path(ass_path).resolve())
             
             # Escape المسار للـ ffmpeg بشكل صحيح
             import platform
@@ -620,10 +706,15 @@ class VideoProcessor:
                 # على Linux/Mac، escape المسافات والأحرف الخاصة
                 subtitle_path_escaped = subtitle_path.replace('\\', '\\\\').replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:')
             
-            # دمج مع الفيديو باستخدام filter ASS
-            # استخدام ass filter مباشرة (أفضل للترجمة الوقتية)
-            # إذا فشل، سيتم استخدام subtitles filter كبديل في الكود أدناه
-            vf_filter = f"ass={subtitle_path_escaped}"
+            # دمج مع الفيديو
+            # استخدام subtitles filter لـ SRT (أفضل للترجمة الفورية)
+            # أو ass filter لـ ASS (للتحكم الكامل في التنسيق)
+            if subtitle_path.endswith('.srt'):
+                # استخدام subtitles filter لـ SRT
+                vf_filter = f"subtitles={subtitle_path_escaped}"
+            else:
+                # استخدام ass filter لـ ASS
+                vf_filter = f"ass={subtitle_path_escaped}"
             
             # محاولة استخدام ass filter أولاً (أفضل للترجمة الوقتية)
             cmd = [
@@ -646,34 +737,49 @@ class VideoProcessor:
             process = subprocess.run(cmd, capture_output=True, timeout=600, text=True)
             
             if process.returncode != 0:
-                logger.error(f"FFmpeg error (ass filter): {process.stderr}")
-                logger.info("Trying with subtitles filter as fallback...")
+                logger.error(f"FFmpeg error: {process.stderr}")
                 
-                # محاولة بديلة: استخدام subtitles filter
-                vf_filter_alt = f"subtitles={subtitle_path_escaped}"
-                cmd_alt = [
-                    'ffmpeg',
-                    '-i', video_path,
-                    '-vf', vf_filter_alt,
-                    '-c:a', 'copy',
-                    '-c:v', 'libx264',
-                    '-preset', 'fast',
-                    '-crf', '23',
-                    '-threads', '0',
-                    '-y',
-                    output_path
-                ]
-                
-                process_alt = subprocess.run(cmd_alt, capture_output=True, timeout=600, text=True)
-                
-                if process_alt.returncode != 0:
-                    logger.error(f"FFmpeg error (subtitles filter): {process_alt.stderr}")
-                    return False
+                # إذا كان يستخدم subtitles filter وفشل، جرب ass filter
+                if subtitle_path.endswith('.srt'):
+                    logger.info("Trying with ass filter as fallback...")
+                    # تحويل SRT إلى ASS
+                    with open(subtitle_path, 'r', encoding='utf-8') as f:
+                        srt_content = f.read()
+                    
+                    ass_content = SubtitleProcessor.create_ass(srt_content, settings)
+                    ass_path = subtitle_path.replace('.srt', '.ass')
+                    
+                    with open(ass_path, 'w', encoding='utf-8') as f:
+                        f.write(ass_content)
+                    
+                    ass_path_escaped = str(Path(ass_path).resolve()).replace('\\', '\\\\').replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:')
+                    vf_filter_alt = f"ass={ass_path_escaped}"
+                    
+                    cmd_alt = [
+                        'ffmpeg',
+                        '-i', video_path,
+                        '-vf', vf_filter_alt,
+                        '-c:a', 'copy',
+                        '-c:v', 'libx264',
+                        '-preset', 'fast',
+                        '-crf', '23',
+                        '-threads', '0',
+                        '-y',
+                        output_path
+                    ]
+                    
+                    process_alt = subprocess.run(cmd_alt, capture_output=True, timeout=600, text=True)
+                    
+                    if process_alt.returncode != 0:
+                        logger.error(f"FFmpeg error (ass filter): {process_alt.stderr}")
+                        return False
+                    else:
+                        logger.info("Successfully merged with ass filter")
+                        return True
                 else:
-                    logger.info("Successfully merged with subtitles filter")
-                    return True
+                    return False
             
-            logger.info("Successfully merged subtitles with ass filter")
+            logger.info(f"Successfully merged subtitles using {'subtitles' if subtitle_path.endswith('.srt') else 'ass'} filter")
             return True
             
         except Exception as e:
@@ -1577,23 +1683,14 @@ def api_instant_translate():
                     else:
                         improved_segments = translated_segments
                     
-                    srt_lines = []
-                    for i, seg in enumerate(improved_segments, 1):
-                        start = float(seg.get('start', 0))
-                        end = float(seg.get('end', start + 3))
-                        text = seg.get('text', '').strip()
-                        
-                        if text:
-                            start_str = SubtitleProcessor._format_time(start)
-                            end_str = SubtitleProcessor._format_time(end)
-                            
-                            srt_lines.append(f"{i}")
-                            srt_lines.append(f"{start_str} --> {end_str}")
-                            srt_lines.append(text)
-                            srt_lines.append("")
+                    # تنظيف وترتيب segments قبل إنشاء SRT
+                    cleaned_segments = SubtitleProcessor.clean_and_merge_segments(improved_segments)
                     
-                    if srt_lines:
-                        subtitle_text = '\n'.join(srt_lines)
+                    # إنشاء SRT من segments المنظفة
+                    if cleaned_segments:
+                        subtitle_text = SubtitleProcessor.create_srt(cleaned_segments)
+                    else:
+                        subtitle_text = ""
                 
                 # الحالة الثانية: استخدام segments من transcript مع النص المترجم
                 elif transcript_data and transcript_data.get('segments'):
@@ -1607,23 +1704,14 @@ def api_instant_translate():
                         # تحسين المزامنة باستخدام word-level timestamps إذا كانت متوفرة
                         improved_segments = SubtitleProcessor.improve_sync_with_words(segments, translated_segments)
                         
-                        srt_lines = []
-                        for i, seg in enumerate(improved_segments, 1):
-                            start = float(seg.get('start', 0))
-                            end = float(seg.get('end', start + 3))
-                            text = seg.get('text', '').strip()
-                            
-                            if text:
-                                start_str = SubtitleProcessor._format_time(start)
-                                end_str = SubtitleProcessor._format_time(end)
-                                
-                                srt_lines.append(f"{i}")
-                                srt_lines.append(f"{start_str} --> {end_str}")
-                                srt_lines.append(text)
-                                srt_lines.append("")
+                        # تنظيف وترتيب segments قبل إنشاء SRT
+                        cleaned_segments = SubtitleProcessor.clean_and_merge_segments(improved_segments)
                         
-                        if srt_lines:
-                            subtitle_text = '\n'.join(srt_lines)
+                        # إنشاء SRT من segments المنظفة
+                        if cleaned_segments:
+                            subtitle_text = SubtitleProcessor.create_srt(cleaned_segments)
+                        else:
+                            subtitle_text = ""
                     else:
                         # Fallback: تقسيم بسيط
                         if '\n' in translated_text:
@@ -1677,10 +1765,34 @@ def api_instant_translate():
                     
                     subtitle_text = '\n'.join(srt_lines)
             
-            # إنشاء SRT
+            # إنشاء ملف SRT نظيف ومنظم
+            # التأكد من أن subtitle_text هو SRT صحيح
+            if not subtitle_text.strip().startswith('1\n') and not subtitle_text.strip().startswith('WEBVTT'):
+                # إذا لم يكن SRT، تحويله
+                if subtitle_text.strip():
+                    # تقسيم إلى أسطر وإنشاء SRT بسيط
+                    lines = [line.strip() for line in subtitle_text.split('\n') if line.strip()]
+                    if lines:
+                        srt_lines = []
+                        for i, line in enumerate(lines, 1):
+                            start_time = (i - 1) * 3
+                            end_time = i * 3
+                            start_str = SubtitleProcessor._format_time(start_time)
+                            end_str = SubtitleProcessor._format_time(end_time)
+                            
+                            srt_lines.append(f"{i}")
+                            srt_lines.append(f"{start_str} --> {end_str}")
+                            srt_lines.append(line)
+                            srt_lines.append("")
+                        subtitle_text = '\n'.join(srt_lines)
+            
+            # إنشاء ملف SRT
             srt_path = Path(app.config['SUBTITLE_FOLDER']) / f"subtitle_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
             with open(srt_path, 'w', encoding='utf-8') as f:
                 f.write(subtitle_text)
+            
+            segment_count = len([s for s in subtitle_text.split('\n\n') if s.strip()])
+            logger.info(f"Created SRT file: {srt_path} with {segment_count} segments")
             
             # دمج
             output_file = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
