@@ -97,7 +97,7 @@ class VideoDownloader:
         """التحقق من إذا كان الرابط YouTube Shorts"""
         return '/shorts/' in url.lower() or 'youtube.com/shorts/' in url.lower()
     
-    def get_ydl_opts(self, platform: str, quality: str = 'best') -> dict:
+    def get_ydl_opts(self, platform: str, quality: str = 'best', player_client: str = 'web') -> dict:
         """الحصول على إعدادات yt-dlp"""
         opts = {
             'outtmpl': os.path.join(app.config['DOWNLOAD_FOLDER'], '%(title)s.%(ext)s'),
@@ -117,7 +117,7 @@ class VideoDownloader:
             # استخدام extractor args محسّن
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['web'],  # استخدام web فقط لتجنب مشاكل android
+                    'player_client': [player_client],  # استخدام client محدد
                 }
             },
             # السماح بتحميل أي تنسيق متاح
@@ -168,153 +168,147 @@ class VideoDownloader:
             # لـ YouTube Shorts، استخدام إعدادات خاصة
             if is_shorts:
                 logger.info("Detected YouTube Shorts - using special handling")
-            
-            # أولاً: محاولة استخراج المعلومات بدون format محدد لمعرفة التنسيقات المتاحة
-            try:
-                ydl_opts_info = self.get_ydl_opts(platform, quality)
-                ydl_opts_info['format'] = None  # بدون format محدد
-                
-                with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    
-                    if not info:
-                        raise Exception("لم يتم العثور على معلومات الفيديو")
-                    
-                    # الحصول على التنسيقات المتاحة
-                    formats = info.get('formats', [])
-                    available_formats = []
-                    
-                    for fmt in formats:
-                        if fmt.get('vcodec') != 'none' or fmt.get('acodec') != 'none':
-                            available_formats.append(fmt.get('format_id'))
-                    
-                    logger.info(f"Available formats: {available_formats[:10]}")  # أول 10 تنسيقات
-            except Exception as e:
-                logger.warning(f"Could not get format list: {e}")
-                available_formats = []
-            
-            # محاولة التحميل مع fallback للتنسيقات
-            formats_to_try = []
-            
-            # لـ YouTube Shorts، استخدام تنسيقات أبسط
-            if is_shorts:
-                formats_to_try = [
-                    'best',  # أفضل تنسيق متاح
-                    'worst',  # أي تنسيق متاح
-                    None  # بدون format محدد
-                ]
-            elif quality == 'best':
-                formats_to_try = [
-                    'best',  # أفضل تنسيق متاح بدون قيود
-                    'worst',  # أي تنسيق متاح
-                    None  # بدون format محدد - yt-dlp سيختار تلقائياً
-                ]
-            elif quality == '720p' or quality == 'medium':
-                formats_to_try = [
-                    'best[height<=720]',
-                    'best[height<=1080]',
-                    'best',
-                    None
-                ]
-            elif quality == '480p' or quality == 'low':
-                formats_to_try = [
-                    'best[height<=480]',
-                    'best[height<=720]',
-                    'best',
-                    None
-                ]
-            elif quality == 'audio':
-                formats_to_try = [
-                    'bestaudio',
-                    'worstaudio',
-                    None
-                ]
+                # محاولة clients مختلفة لـ YouTube Shorts
+                clients_to_try = ['ios', 'android', 'mweb', 'web']
             else:
-                formats_to_try = [quality, 'best', None]
+                clients_to_try = ['web', 'ios', 'android']
             
+            # محاولة التحميل مع clients مختلفة
             last_error = None
-            for format_str in formats_to_try:
+            for client in clients_to_try:
                 try:
-                    ydl_opts = self.get_ydl_opts(platform, quality)
-                    if format_str is not None:
-                        ydl_opts['format'] = format_str
+                    logger.info(f"Trying with player_client: {client}")
+                    
+                    # محاولة التحميل مع fallback للتنسيقات
+                    formats_to_try = []
+                    
+                    # لـ YouTube Shorts، استخدام تنسيقات أبسط
+                    if is_shorts:
+                        formats_to_try = [
+                            'best',  # أفضل تنسيق متاح
+                            'worst',  # أي تنسيق متاح
+                            None  # بدون format محدد
+                        ]
+                    elif quality == 'best':
+                        formats_to_try = [
+                            'best',  # أفضل تنسيق متاح بدون قيود
+                            'worst',  # أي تنسيق متاح
+                            None  # بدون format محدد - yt-dlp سيختار تلقائياً
+                        ]
+                    elif quality == '720p' or quality == 'medium':
+                        formats_to_try = [
+                            'best[height<=720]',
+                            'best[height<=1080]',
+                            'best',
+                            None
+                        ]
+                    elif quality == '480p' or quality == 'low':
+                        formats_to_try = [
+                            'best[height<=480]',
+                            'best[height<=720]',
+                            'best',
+                            None
+                        ]
+                    elif quality == 'audio':
+                        formats_to_try = [
+                            'bestaudio',
+                            'worstaudio',
+                            None
+                        ]
                     else:
-                        # بدون format محدد - yt-dlp سيختار تلقائياً
-                        ydl_opts.pop('format', None)
+                        formats_to_try = [quality, 'best', None]
                     
-                    # إضافة ignoreerrors للسماح بالتخطي عند الفشل
-                    ydl_opts['ignoreerrors'] = False
-                    
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        # استخراج المعلومات أولاً
-                        info = ydl.extract_info(url, download=False)
-                        
-                        if not info:
-                            raise Exception("لم يتم العثور على معلومات الفيديو")
-                        
-                        # التحقق من وجود الملف
-                        expected_filename = ydl.prepare_filename(info)
-                        if quality == 'audio':
-                            expected_filename = expected_filename.rsplit('.', 1)[0] + '.mp3'
-                        
-                        expected_basename = os.path.basename(expected_filename)
-                        existing_file = os.path.join(app.config['DOWNLOAD_FOLDER'], expected_basename)
-                        
-                        if os.path.exists(existing_file):
-                            logger.info(f"الملف موجود مسبقاً: {existing_file}")
-                            filename = existing_file
-                        else:
-                            # تحميل الفيديو
-                            ydl.download([url])
-                            filename = ydl.prepare_filename(info)
-                            if quality == 'audio':
-                                filename = filename.rsplit('.', 1)[0] + '.mp3'
+                    for format_str in formats_to_try:
+                        try:
+                            ydl_opts = self.get_ydl_opts(platform, quality, player_client=client)
+                            if format_str is not None:
+                                ydl_opts['format'] = format_str
+                            else:
+                                # بدون format محدد - yt-dlp سيختار تلقائياً
+                                ydl_opts.pop('format', None)
                             
-                            filename = os.path.normpath(filename)
+                            # إضافة ignoreerrors للسماح بالتخطي عند الفشل
+                            ydl_opts['ignoreerrors'] = False
                             
-                            if not os.path.isabs(filename):
-                                basename = os.path.basename(filename)
-                                full_path = os.path.join(app.config['DOWNLOAD_FOLDER'], basename)
-                                if os.path.exists(full_path):
-                                    filename = full_path
+                            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                                # استخراج المعلومات أولاً
+                                info = ydl.extract_info(url, download=False)
+                                
+                                if not info:
+                                    raise Exception("لم يتم العثور على معلومات الفيديو")
+                                
+                                # التحقق من وجود الملف
+                                expected_filename = ydl.prepare_filename(info)
+                                if quality == 'audio':
+                                    expected_filename = expected_filename.rsplit('.', 1)[0] + '.mp3'
+                                
+                                expected_basename = os.path.basename(expected_filename)
+                                existing_file = os.path.join(app.config['DOWNLOAD_FOLDER'], expected_basename)
+                                
+                                if os.path.exists(existing_file):
+                                    logger.info(f"الملف موجود مسبقاً: {existing_file}")
+                                    filename = existing_file
                                 else:
-                                    # البحث عن الملف الأحدث
-                                    download_folder = app.config['DOWNLOAD_FOLDER']
-                                    if os.path.exists(download_folder):
-                                        video_files = []
-                                        for file in os.listdir(download_folder):
-                                            file_path = os.path.join(download_folder, file)
-                                            if os.path.isfile(file_path) and file.endswith(('.mp4', '.webm', '.mkv', '.mp3', '.m4a', '.mov', '.avi')):
-                                                video_files.append((file_path, os.path.getmtime(file_path)))
-                                        
-                                        if video_files:
-                                            video_files.sort(key=lambda x: x[1], reverse=True)
-                                            filename = video_files[0][0]
-                        
-                        if not os.path.exists(filename):
-                            raise Exception(f"لم يتم العثور على الملف بعد التحميل: {filename}")
-                        
-                        result['success'] = True
-                        result['message'] = 'تم التحميل بنجاح'
-                        result['file'] = filename
-                        result['info'] = {
-                            'title': info.get('title', 'Unknown'),
-                            'duration': info.get('duration', 0),
-                            'platform': platform,
-                            'quality': quality
-                        }
-                        return result
-                        
+                                    # تحميل الفيديو
+                                    ydl.download([url])
+                                    filename = ydl.prepare_filename(info)
+                                    if quality == 'audio':
+                                        filename = filename.rsplit('.', 1)[0] + '.mp3'
+                                    
+                                    filename = os.path.normpath(filename)
+                                    
+                                    if not os.path.isabs(filename):
+                                        basename = os.path.basename(filename)
+                                        full_path = os.path.join(app.config['DOWNLOAD_FOLDER'], basename)
+                                        if os.path.exists(full_path):
+                                            filename = full_path
+                                        else:
+                                            # البحث عن الملف الأحدث
+                                            download_folder = app.config['DOWNLOAD_FOLDER']
+                                            if os.path.exists(download_folder):
+                                                video_files = []
+                                                for file in os.listdir(download_folder):
+                                                    file_path = os.path.join(download_folder, file)
+                                                    if os.path.isfile(file_path) and file.endswith(('.mp4', '.webm', '.mkv', '.mp3', '.m4a', '.mov', '.avi')):
+                                                        video_files.append((file_path, os.path.getmtime(file_path)))
+                                                
+                                                if video_files:
+                                                    video_files.sort(key=lambda x: x[1], reverse=True)
+                                                    filename = video_files[0][0]
+                                
+                                if not os.path.exists(filename):
+                                    raise Exception(f"لم يتم العثور على الملف بعد التحميل: {filename}")
+                                
+                                result['success'] = True
+                                result['message'] = 'تم التحميل بنجاح'
+                                result['file'] = filename
+                                result['info'] = {
+                                    'title': info.get('title', 'Unknown'),
+                                    'duration': info.get('duration', 0),
+                                    'platform': platform,
+                                    'quality': quality
+                                }
+                                logger.info(f"Successfully downloaded with client: {client}, format: {format_str}")
+                                return result
+                                
+                        except Exception as e:
+                            error_msg = str(e)
+                            # تخطي الأخطاء المتعلقة بالتنسيقات غير المتاحة
+                            if 'format is not available' in error_msg or 'Only images are available' in error_msg:
+                                logger.warning(f"Format {format_str} not available with client {client}, trying next...")
+                                continue
+                            else:
+                                logger.warning(f"Failed with format {format_str} and client {client}: {e}")
+                                continue
+                    
+                    # إذا فشلت جميع التنسيقات مع هذا client، جرب client آخر
+                    logger.warning(f"All formats failed with client {client}, trying next client...")
+                    continue
+                    
                 except Exception as e:
                     last_error = e
-                    error_msg = str(e)
-                    # تخطي الأخطاء المتعلقة بالتنسيقات غير المتاحة
-                    if 'format is not available' in error_msg or 'Only images are available' in error_msg:
-                        logger.warning(f"Format {format_str} not available, trying next...")
-                        continue
-                    else:
-                        logger.warning(f"Failed with format {format_str}: {e}")
-                        continue
+                    logger.warning(f"Failed with client {client}: {e}")
+                    continue
             
             # إذا فشلت جميع المحاولات
             if last_error:
