@@ -363,17 +363,19 @@ class SubtitleProcessor:
         alignment = {'top': '8', 'center': '5', 'bottom': '2'}.get(position, '2')
         margin_v = 10
         
-        ass_header = f"""[Script Info]
+        # تحضير back_color بشكل منفصل لتجنب مشاكل f-string
+        bg_opacity_hex = f"{bg_opacity:02X}"
+        bg_color_part = bg_color_bgr[3:] if len(bg_color_bgr) > 3 else bg_color_bgr
+        back_colour = f"&H{bg_opacity_hex}{bg_color_part}"
+        
+        # استخدام string concatenation لتجنب مشاكل f-string مع الأحرف الخاصة
+        ass_header = """[Script Info]
 Title: Generated Subtitles
 ScriptType: v4.00+
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_family},{font_size},{primary_color},&H000000FF,&H00000000,&H{bg_opacity:02X}{bg_color_bgr[3:]},0,0,0,0,100,100,0,0,3,2,1,{alignment},10,10,{margin_v},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
+Style: Default,""" + str(font_family) + "," + str(font_size) + "," + str(primary_color) + ",&H000000FF,&H00000000," + str(back_colour) + ",0,0,0,0,100,100,0,0,3,2,1," + str(alignment) + ",10,10," + str(margin_v) + ",1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
         
         events = []
         lines = srt_content.strip().split('\n')
