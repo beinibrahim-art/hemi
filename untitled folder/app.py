@@ -256,13 +256,25 @@ class SmartMediaDownloader:
     def get_available_formats(self, url: str) -> dict:
         """الحصول على جميع التنسيقات المتاحة للفيديو"""
         try:
+            # استخدام JSON للحصول على معلومات أكثر دقة
+            cmd_json = ['yt-dlp', '--dump-json', '--no-warnings', '--skip-download', url]
+            result_json = subprocess.run(cmd_json, capture_output=True, text=True, timeout=60)
+            
+            info_data = None
+            if result_json.returncode == 0:
+                try:
+                    info_data = json.loads(result_json.stdout)
+                except:
+                    pass
+            
+            # استخدام -F للحصول على قائمة التنسيقات
             cmd = ['yt-dlp', '-F', '--no-warnings', url]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             
             if result.returncode != 0:
                 return {'success': False, 'error': 'Could not fetch formats'}
             
-            formats = self._parse_formats(result.stdout)
+            formats = self._parse_formats(result.stdout, info_data)
             info = self._get_video_info(url)
             
             return {
@@ -277,7 +289,7 @@ class SmartMediaDownloader:
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
-    def _parse_formats(self, output: str) -> dict:
+    def _parse_formats(self, output: str, info_data: dict = None) -> dict:
         """تحليل مخرجات yt-dlp format"""
         formats = {
             'video_audio': [],
@@ -285,6 +297,14 @@ class SmartMediaDownloader:
             'audio_only': [],
             'best': None
         }
+        
+        # استخدام info_data للتحقق من الدقات العالية
+        max_height = 0
+        if info_data and 'formats' in info_data:
+            for fmt in info_data.get('formats', []):
+                height = fmt.get('height')
+                if height and height > max_height:
+                    max_height = height
         
         lines = output.split('\n')
         
@@ -299,13 +319,17 @@ class SmartMediaDownloader:
             format_id = parts[0]
             quality_match = re.search(r'(\d+)x(\d+)', line)
             resolution = None
+            height_value = None
+            
             if quality_match:
                 width, height = quality_match.groups()
+                height_value = int(height)
                 resolution = f"{height}p"
             
             format_info = {
                 'id': format_id,
                 'resolution': resolution,
+                'height': height_value,  # إضافة قيمة الارتفاع للتحقق
                 'note': '',
                 'filesize': self._extract_filesize(line)
             }
@@ -320,19 +344,21 @@ class SmartMediaDownloader:
                 formats['audio_only'].append(format_info)
                 
             elif 'video only' in line_lower:
-                if resolution:
-                    format_info['note'] = f'{resolution} (No Audio)'
+                if resolution or height_value:
+                    format_info['note'] = f'{resolution or f"{height_value}p"} (No Audio)'
                     formats['video_only'].append(format_info)
                     
-            elif resolution:
-                format_info['note'] = f'{resolution}'
+            elif resolution or height_value:
+                format_info['note'] = f'{resolution or f"{height_value}p"}'
                 formats['video_audio'].append(format_info)
         
-        formats['presets'] = self._create_smart_presets(formats)
+        # إضافة معلومات max_height للتحقق من 4K
+        formats['max_height'] = max_height
+        formats['presets'] = self._create_smart_presets(formats, max_height)
         
         return formats
     
-    def _create_smart_presets(self, formats: dict) -> list:
+    def _create_smart_presets(self, formats: dict, max_height: int = 0) -> list:
         """إنشاء presets ذكية للتحميل"""
         presets = []
         
@@ -344,8 +370,26 @@ class SmartMediaDownloader:
             'command': 'bestvideo+bestaudio/best'
         })
         
-        has_4k = any(f.get('resolution') in ['2160p', '4320p'] 
-                     for f in formats['video_audio'] + formats['video_only'])
+        # جمع جميع الدقات المتاحة
+        all_resolutions = []
+        for f in formats['video_audio'] + formats['video_only']:
+            resolution = f.get('resolution')
+            height = f.get('height')
+            if resolution:
+                all_resolutions.append(resolution)
+            elif height:
+                all_resolutions.append(f"{height}p")
+        
+        # التحقق من وجود 4K (2160p أو أعلى) - استخدام max_height كبديل
+        has_4k = (
+            max_height >= 2160 or
+            any(
+                (f.get('resolution') in ['2160p', '4320p']) or 
+                (f.get('height') and f.get('height') >= 2160)
+                for f in formats['video_audio'] + formats['video_only']
+            )
+        )
+        
         if has_4k:
             presets.append({
                 'id': '4k',
@@ -355,8 +399,15 @@ class SmartMediaDownloader:
                 'command': 'bestvideo[height<=2160]+bestaudio/best[height<=2160]'
             })
         
-        has_1440p = any(f.get('resolution') == '1440p' 
-                        for f in formats['video_audio'] + formats['video_only'])
+        # التحقق من وجود 1440p
+        has_1440p = (
+            (max_height >= 1440 and max_height < 2160) or
+            any(
+                (f.get('resolution') == '1440p') or 
+                (f.get('height') and 1440 <= f.get('height') < 2160)
+                for f in formats['video_audio'] + formats['video_only']
+            )
+        )
         if has_1440p:
             presets.append({
                 'id': '1440p',
@@ -366,8 +417,15 @@ class SmartMediaDownloader:
                 'command': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]'
             })
         
-        has_1080p = any(f.get('resolution') == '1080p' 
-                        for f in formats['video_audio'] + formats['video_only'])
+        # التحقق من وجود 1080p
+        has_1080p = (
+            (max_height >= 1080 and max_height < 1440) or
+            any(
+                (f.get('resolution') == '1080p') or 
+                (f.get('height') and 1080 <= f.get('height') < 1440)
+                for f in formats['video_audio'] + formats['video_only']
+            )
+        )
         if has_1080p:
             presets.append({
                 'id': '1080p',
@@ -377,8 +435,15 @@ class SmartMediaDownloader:
                 'command': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]'
             })
         
-        has_720p = any(f.get('resolution') == '720p' 
-                       for f in formats['video_audio'] + formats['video_only'])
+        # التحقق من وجود 720p
+        has_720p = (
+            (max_height >= 720 and max_height < 1080) or
+            any(
+                (f.get('resolution') == '720p') or 
+                (f.get('height') and 720 <= f.get('height') < 1080)
+                for f in formats['video_audio'] + formats['video_only']
+            )
+        )
         if has_720p:
             presets.append({
                 'id': '720p',
@@ -388,8 +453,15 @@ class SmartMediaDownloader:
                 'command': 'bestvideo[height<=720]+bestaudio/best[height<=720]'
             })
         
-        has_480p = any(f.get('resolution') == '480p' 
-                       for f in formats['video_audio'] + formats['video_only'])
+        # التحقق من وجود 480p
+        has_480p = (
+            (max_height >= 480 and max_height < 720) or
+            any(
+                (f.get('resolution') == '480p') or 
+                (f.get('height') and 480 <= f.get('height') < 720)
+                for f in formats['video_audio'] + formats['video_only']
+            )
+        )
         if has_480p:
             presets.append({
                 'id': '480p',
