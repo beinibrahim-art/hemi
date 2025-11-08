@@ -342,19 +342,23 @@ class SubtitleProcessor:
     @staticmethod
     def create_ass(srt_content: str, settings: Dict) -> str:
         """إنشاء ملف ASS مع إعدادات مخصصة"""
-        font_size = settings.get('fontSize', settings.get('font_size', 24))
-        font_color = settings.get('fontColor', settings.get('font_color', '#FFFFFF'))
-        bg_color = settings.get('bgColor', settings.get('bg_color', '#000000'))
-        bg_opacity = settings.get('bgOpacity', settings.get('bg_opacity', 180))
-        position = settings.get('position', 'bottom')
-        font_family = settings.get('fontFamily', settings.get('font_name', 'Arial'))
+        # تحويل جميع القيم إلى الأنواع الصحيحة
+        font_size = int(settings.get('fontSize', settings.get('font_size', 24)))
+        font_color = str(settings.get('fontColor', settings.get('font_color', '#FFFFFF')))
+        bg_color = str(settings.get('bgColor', settings.get('bg_color', '#000000')))
+        bg_opacity = int(settings.get('bgOpacity', settings.get('bg_opacity', 180)))
+        position = str(settings.get('position', 'bottom'))
+        font_family = str(settings.get('fontFamily', settings.get('font_name', 'Arial')))
+        
+        # التأكد من أن bg_opacity في النطاق الصحيح (0-255)
+        bg_opacity = max(0, min(255, bg_opacity))
         
         # تحويل ألوان RGB إلى BGR
         def rgb_to_bgr(hex_color):
-            hex_color = hex_color.lstrip('#')
+            hex_color = str(hex_color).lstrip('#')
             if len(hex_color) == 6:
                 r, g, b = hex_color[0:2], hex_color[2:4], hex_color[4:6]
-                return f"&H00{b}{g}{r}"
+                return "&H00" + b + g + r
             return "&H00FFFFFF"
         
         primary_color = rgb_to_bgr(font_color)
@@ -363,10 +367,10 @@ class SubtitleProcessor:
         alignment = {'top': '8', 'center': '5', 'bottom': '2'}.get(position, '2')
         margin_v = 10
         
-        # تحضير back_color بشكل منفصل لتجنب مشاكل f-string
-        bg_opacity_hex = f"{bg_opacity:02X}"
+        # تحضير back_color بشكل منفصل - استخدام format على int فقط
+        bg_opacity_hex = format(bg_opacity, '02X')
         bg_color_part = bg_color_bgr[3:] if len(bg_color_bgr) > 3 else bg_color_bgr
-        back_colour = f"&H{bg_opacity_hex}{bg_color_part}"
+        back_colour = "&H" + bg_opacity_hex + bg_color_part
         
         # استخدام string concatenation لتجنب مشاكل f-string مع الأحرف الخاصة
         ass_header = """[Script Info]
@@ -392,7 +396,9 @@ Style: Default,""" + str(font_family) + "," + str(font_size) + "," + str(primary
                         start_ass = start.replace(',', '.')
                         end_ass = end.replace(',', '.')
                         
-                        events.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
+                        # استخدام string concatenation لتجنب مشاكل f-string
+                        dialogue_line = "Dialogue: 0," + start_ass + "," + end_ass + ",Default,,0,0,0,," + text
+                        events.append(dialogue_line)
                     
                     i += 4
                 else:
