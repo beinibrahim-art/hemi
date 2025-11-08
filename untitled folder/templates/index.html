@@ -1865,27 +1865,22 @@
                     
                     // إذا كانت البيانات من API الجديد (get_available_formats)
                     if (response.data.formats && response.data.formats.presets) {
+                        // استخدام presets مباشرة من API الجديد
                         qualities = response.data.formats.presets.map(preset => ({
                             id: preset.id,
-                            label: preset.name,
-                            description: preset.description,
+                            label: preset.name || preset.id,
+                            description: preset.description || '',
                             ext: preset.id === 'audio' ? 'mp3' : 'mp4',
-                            info: preset.description
+                            info: preset.description || '',
+                            command: preset.command || preset.id, // حفظ command للاستخدام في التحميل
+                            height: preset.height || null,
+                            emoji: preset.name?.match(/[\u{1F300}-\u{1F9FF}]/u)?.[0] || null, // استخراج emoji من الاسم
+                            icon: preset.icon || null,
+                            priority: preset.priority || 0
                         }));
                         
-                        // إضافة التنسيقات الفردية أيضاً
-                        if (response.data.formats.video_audio) {
-                            response.data.formats.video_audio.forEach(format => {
-                                if (format.resolution && !qualities.find(q => q.id === format.resolution.toLowerCase())) {
-                                    qualities.push({
-                                        id: format.resolution.toLowerCase(),
-                                        label: format.resolution,
-                                        ext: 'mp4',
-                                        info: format.note || format.filesize || ''
-                                    });
-                                }
-                            });
-                        }
+                        // ترتيب حسب الأولوية
+                        qualities.sort((a, b) => (b.priority || 0) - (a.priority || 0));
                     }
                     
                     displayQualities(qualities);
@@ -1936,25 +1931,22 @@
                     option.classList.add('selected', 'ring-2', 'ring-purple-400');
                 }
                 
-                let icon = '📹';
+                // تحديد الأيقونة - استخدام emoji من preset إذا كان موجوداً
+                let icon = quality.emoji || '📹';
                 if (quality.id === 'audio' || quality.ext === 'mp3') {
-                    icon = '🎵';
+                    icon = quality.emoji || '🎵';
                 } else if (quality.id === 'best') {
-                    icon = '⭐';
+                    icon = quality.emoji || '⭐';
+                } else if (quality.id === '4k' || quality.id === '8k') {
+                    icon = quality.emoji || '💎';
                 }
                 
-                // بناء HTML مع معلومات إضافية
+                // بناء HTML مع معلومات إضافية من preset
                 let infoHtml = '';
-                if (quality.info) {
-                    infoHtml = `<div class="text-xs text-gray-400 mt-1">${quality.info}</div>`;
-                } else if (quality.filesize_mb || quality.bitrate) {
-                    const infoParts = [];
-                    if (quality.filesize_mb) infoParts.push(`${quality.filesize_mb} MB`);
-                    if (quality.bitrate) infoParts.push(`${quality.bitrate} kbps`);
-                    if (quality.fps) infoParts.push(`${quality.fps} fps`);
-                    if (infoParts.length > 0) {
-                        infoHtml = `<div class="text-xs text-gray-400 mt-1">${infoParts.join(' • ')}</div>`;
-                    }
+                if (quality.info || quality.description) {
+                    const infoText = quality.info || quality.description || '';
+                    // استخراج معلومات إضافية من description (FPS، الحجم، bitrate)
+                    infoHtml = `<div class="text-xs text-gray-400 mt-1">${infoText}</div>`;
                 }
                 
                 option.innerHTML = `
@@ -1964,8 +1956,15 @@
                     ${infoHtml}
                 `;
                 
+                // حفظ command في dataset للاستخدام لاحقاً
+                if (quality.command) {
+                    option.dataset.command = quality.command;
+                }
+                
                 option.onclick = () => {
                     selectDownloadQuality(quality.id);
+                    // حفظ command في متغير عام للاستخدام في التحميل
+                    window.selectedQualityCommand = quality.command || quality.id;
                     // بعد اختيار الجودة، يمكن التحميل مباشرة
                     const downloadStartBtn = document.getElementById('downloadStartBtn');
                     if (downloadStartBtn) {
@@ -2020,9 +2019,29 @@
                     const response = await axios.post('/api/get-qualities', { url });
                     if (response.data.success) {
                         if (qualityLoading) qualityLoading.classList.add('hidden');
-                        displayQualities(response.data.qualities);
-                        if (response.data.title) {
-                            showAlert(`تم العثور على: ${response.data.title} - اختر الجودة`, 'info');
+                        
+                        // معالجة البيانات من API الجديد
+                        let qualities = response.data.qualities;
+                        if (response.data.formats && response.data.formats.presets) {
+                            qualities = response.data.formats.presets.map(preset => ({
+                                id: preset.id,
+                                label: preset.name || preset.id,
+                                description: preset.description || '',
+                                ext: preset.id === 'audio' ? 'mp3' : 'mp4',
+                                info: preset.description || '',
+                                command: preset.command || preset.id,
+                                height: preset.height || null,
+                                emoji: preset.name?.match(/[\u{1F300}-\u{1F9FF}]/u)?.[0] || null,
+                                icon: preset.icon || null,
+                                priority: preset.priority || 0
+                            }));
+                            qualities.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+                        }
+                        
+                        displayQualities(qualities);
+                        const title = response.data.title || (response.data.info && response.data.info.title);
+                        if (title) {
+                            showAlert(`تم العثور على: ${title} - اختر الجودة`, 'info');
                         }
                         // إضافة علامة أن الجودات تم عرضها
                         qualitySection.classList.add('quality-selected');
@@ -2058,17 +2077,30 @@
                     downloadStartBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> جاري التحميل...';
                 }
                 
-                // استخدام API الجديد مع تتبع التقدم
-                const formatCommand = selectedQuality === 'best' ? 'bestvideo+bestaudio/best' : 
-                                    selectedQuality === 'audio' ? 'audio' :
-                                    selectedQuality === '720p' || selectedQuality === 'medium' ? 'bestvideo[height<=720]+bestaudio/best[height<=720]' :
-                                    selectedQuality === '480p' || selectedQuality === 'low' ? 'bestvideo[height<=480]+bestaudio/best[height<=480]' :
-                                    selectedQuality.startsWith('1080p') ? 'bestvideo[height<=1080]+bestaudio/best[height<=1080]' :
-                                    selectedQuality.startsWith('1440p') ? 'bestvideo[height<=1440]+bestaudio/best[height<=1440]' :
-                                    selectedQuality.startsWith('2160p') || selectedQuality === '4k' ? 'bestvideo[height<=2160]+bestaudio/best[height<=2160]' :
-                                    selectedQuality;
+                // استخدام command من preset المختار
+                let formatCommand = window.selectedQualityCommand || selectedQuality;
+                let isAudio = selectedQuality === 'audio';
                 
-                const isAudio = selectedQuality === 'audio';
+                // إذا لم يكن هناك command محفوظ، استخدم fallback
+                if (!formatCommand || formatCommand === selectedQuality) {
+                    // البحث في quality cards المحفوظة للحصول على command
+                    const selectedCard = document.querySelector(`#qualitySelector .quality-card-glass[data-quality="${selectedQuality}"]`);
+                    if (selectedCard && selectedCard.dataset.command) {
+                        formatCommand = selectedCard.dataset.command;
+                    } else {
+                        // Fallback: استخدام format commands مبنية مسبقاً
+                        formatCommand = selectedQuality === 'best' ? 'bestvideo+bestaudio/best' : 
+                                        selectedQuality === 'audio' ? 'audio' :
+                                        selectedQuality === '8k' ? 'bestvideo[height<=4320]+bestaudio/best[height<=4320]' :
+                                        selectedQuality === '4k' || selectedQuality === '2160p' ? 'bestvideo[height<=2160]+bestaudio/best[height<=2160]' :
+                                        selectedQuality === '1440p' ? 'bestvideo[height<=1440]+bestaudio/best[height<=1440]' :
+                                        selectedQuality === '1080p' ? 'bestvideo[height<=1080]+bestaudio/best[height<=1080]' :
+                                        selectedQuality === '720p' || selectedQuality === 'medium' ? 'bestvideo[height<=720]+bestaudio/best[height<=720]' :
+                                        selectedQuality === '480p' || selectedQuality === 'low' ? 'bestvideo[height<=480]+bestaudio/best[height<=480]' :
+                                        selectedQuality === '360p' ? 'bestvideo[height<=360]+bestaudio/best[height<=360]' :
+                                        selectedQuality;
+                    }
+                }
                 
                 // بدء التحميل
                 const downloadResponse = await axios.post('/api/media/download', {
