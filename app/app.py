@@ -168,10 +168,10 @@ class VideoDownloader:
             # لـ YouTube Shorts، استخدام إعدادات خاصة
             if is_shorts:
                 logger.info("Detected YouTube Shorts - using special handling")
-                # محاولة clients مختلفة لـ YouTube Shorts
-                clients_to_try = ['ios', 'android', 'mweb', 'web']
+                # محاولة clients مختلفة لـ YouTube Shorts - تقليل المحاولات لتسريع العملية
+                clients_to_try = ['ios', 'android', 'web']
             else:
-                clients_to_try = ['web', 'ios', 'android']
+                clients_to_try = ['web']  # استخدام web فقط لتسريع العملية
             
             # محاولة التحميل مع clients مختلفة
             last_error = None
@@ -179,40 +179,35 @@ class VideoDownloader:
                 try:
                     logger.info(f"Trying with player_client: {client}")
                     
-                    # محاولة التحميل مع fallback للتنسيقات
+                    # محاولة التحميل مع fallback للتنسيقات - تقليل المحاولات
                     formats_to_try = []
                     
                     # لـ YouTube Shorts، استخدام تنسيقات أبسط
                     if is_shorts:
                         formats_to_try = [
                             'best',  # أفضل تنسيق متاح
-                            'worst',  # أي تنسيق متاح
                             None  # بدون format محدد
                         ]
                     elif quality == 'best':
                         formats_to_try = [
                             'best',  # أفضل تنسيق متاح بدون قيود
-                            'worst',  # أي تنسيق متاح
                             None  # بدون format محدد - yt-dlp سيختار تلقائياً
                         ]
                     elif quality == '720p' or quality == 'medium':
                         formats_to_try = [
                             'best[height<=720]',
-                            'best[height<=1080]',
                             'best',
                             None
                         ]
                     elif quality == '480p' or quality == 'low':
                         formats_to_try = [
                             'best[height<=480]',
-                            'best[height<=720]',
                             'best',
                             None
                         ]
                     elif quality == 'audio':
                         formats_to_try = [
                             'bestaudio',
-                            'worstaudio',
                             None
                         ]
                     else:
@@ -956,7 +951,7 @@ def api_instant_translate():
         
         elif step == 'merge':
             video_file = data.get('video_file')
-            subtitle_text = data.get('subtitle_text')
+            subtitle_text = data.get('subtitle_text')  # هذا للنص الكامل فقط (fallback)
             settings = data.get('settings', {})
             quality = data.get('quality', 'original')
             
@@ -987,9 +982,6 @@ def api_instant_translate():
             if not video_file or not os.path.exists(video_file):
                 return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
             
-            if not subtitle_text:
-                return jsonify({'success': False, 'message': 'لا يوجد نص للترجمة'}), 400
-            
             video_duration = VideoProcessor.get_video_duration(video_file)
             
             # قراءة البيانات من الملفات المؤقتة بدلاً من session
@@ -1008,9 +1000,12 @@ def api_instant_translate():
                         original_text = transcript_data.get('text', '')
                         source_language = transcript_data.get('language', 'auto')
             
+            # استخدام segments المترجمة فقط - لا نستخدم subtitle_text
             if whisper_segments and len(whisper_segments) > 0:
                 segments_for_srt = []
                 translator = GoogleTranslator(source=source_language, target='ar')
+                
+                logger.info(f"Translating {len(whisper_segments)} segments...")
                 
                 for i, segment in enumerate(whisper_segments):
                     start_time = float(segment.get('start', 0))
@@ -1033,23 +1028,26 @@ def api_instant_translate():
                             'text': translated_segment_text.strip()
                         })
                 
-                # استخدام segments المترجمة مباشرة لإنشاء SRT
+                # استخدام segments المترجمة فقط لإنشاء SRT
                 if segments_for_srt:
+                    logger.info(f"Creating SRT from {len(segments_for_srt)} translated segments")
                     srt_content = SubtitleProcessor.create_srt(
-                        '',  # نص فارغ لأننا نستخدم segments
+                        '',  # نص فارغ - نستخدم segments فقط
                         duration=video_duration,
                         segments=segments_for_srt
                     )
                 else:
-                    # إذا لم تكن هناك segments، استخدم النص المترجم
+                    # إذا لم تكن هناك segments، استخدم النص المترجم (fallback)
+                    logger.warning("No segments available, using full text as fallback")
                     srt_content = SubtitleProcessor.create_srt(
-                        subtitle_text,
+                        subtitle_text or original_text,
                         duration=video_duration
                     )
             else:
                 # إذا لم تكن هناك segments، استخدم النص المترجم فقط
+                logger.warning("No whisper segments found, using full text")
                 srt_content = SubtitleProcessor.create_srt(
-                    subtitle_text,
+                    subtitle_text or '',
                     duration=video_duration
                 )
             
@@ -1546,10 +1544,17 @@ def api_get_qualities():
             return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
         
         try:
+            # استخدام إعدادات بسيطة وسريعة
             ydl_opts = {
                 'quiet': True,
                 'no_warnings': True,
                 'extract_flat': False,
+                'socket_timeout': 15,  # تقليل timeout لتسريع العملية
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['web'],  # استخدام web فقط لتسريع العملية
+                    }
+                },
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:

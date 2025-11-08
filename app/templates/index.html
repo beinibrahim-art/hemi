@@ -667,6 +667,10 @@
                         <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="qualitySelector">
                             <!-- Will be populated dynamically -->
                         </div>
+                        <div id="qualityLoading" class="hidden text-center py-4">
+                            <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-purple-400 mb-2"></div>
+                            <p class="text-gray-300 text-sm">جاري فحص الجودات...</p>
+                        </div>
                     </div>
 
                     <div class="text-center mt-8">
@@ -1839,16 +1843,45 @@
                 return;
             }
 
+            const qualitySection = document.getElementById('qualitySection');
+            const qualitySelector = document.getElementById('qualitySelector');
+            const qualityLoading = document.getElementById('qualityLoading');
+            const checkBtn = event?.target || document.querySelector('[onclick="checkQualities()"]');
+            
+            // إظهار loading indicator
+            if (qualitySection) {
+                qualitySection.classList.remove('hidden');
+                if (qualityLoading) qualityLoading.classList.remove('hidden');
+                if (qualitySelector) qualitySelector.innerHTML = '';
+            }
+            
+            if (checkBtn) {
+                checkBtn.disabled = true;
+                checkBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> جاري الفحص...';
+            }
+
             try {
                 const response = await axios.post('/api/get-qualities', { url });
                 if (response.data.success) {
+                    if (qualityLoading) qualityLoading.classList.add('hidden');
                     displayQualities(response.data.qualities);
+                    if (response.data.title) {
+                        showAlert(`تم العثور على: ${response.data.title}`, 'success');
+                    }
                 } else {
-                    showAlert(response.data.message, 'danger');
+                    showAlert(response.data.message || 'فشل فحص الجودات', 'danger');
+                    if (qualitySection) qualitySection.classList.add('hidden');
                 }
             } catch (error) {
                 console.error('Error:', error);
-                showAlert('خطأ في فحص الجودات', 'danger');
+                showAlert('خطأ في فحص الجودات: ' + (error.response?.data?.message || error.message), 'danger');
+                if (qualitySection) qualitySection.classList.add('hidden');
+            } finally {
+                if (checkBtn) {
+                    checkBtn.disabled = false;
+                    checkBtn.innerHTML = '<i class="bi bi-search"></i> فحص الجودات';
+                }
+                if (qualityLoading) qualityLoading.classList.add('hidden');
             }
         };
 
