@@ -1659,23 +1659,6 @@ def api_instant_translate():
                         
                         if srt_lines:
                             subtitle_text = '\n'.join(srt_lines)
-                    else:
-                        # Fallback: تحويل النص العادي إلى SRT بسيط
-                        lines = subtitle_text.split('\n')
-                        srt_lines = []
-                        for i, line in enumerate(lines, 1):
-                            if line.strip():
-                                start_time = (i - 1) * 3
-                                end_time = i * 3
-                                start_str = SubtitleProcessor._format_time(start_time)
-                                end_str = SubtitleProcessor._format_time(end_time)
-                                
-                                srt_lines.append(f"{i}")
-                                srt_lines.append(f"{start_str} --> {end_str}")
-                                srt_lines.append(line.strip())
-                                srt_lines.append("")
-                        
-                        subtitle_text = '\n'.join(srt_lines)
                 else:
                     # Fallback: تحويل النص العادي إلى SRT بسيط
                     lines = subtitle_text.split('\n')
