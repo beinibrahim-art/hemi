@@ -442,7 +442,7 @@ class SubtitleProcessor:
     
     @staticmethod
     def create_srt(segments: List[Dict]) -> str:
-        """إنشاء ملف SRT من segments مع تنظيف وترتيب"""
+        """إنشاء ملف SRT من segments مع تنظيف وترتيب ودعم كامل للعربية"""
         if not segments:
             return ""
         
@@ -472,7 +472,28 @@ class SubtitleProcessor:
             srt_lines.append(text)
             srt_lines.append("")
         
+        # إرجاع SRT مع دعم UTF-8
         return '\n'.join(srt_lines)
+    
+    @staticmethod
+    def save_srt_file(content: str, file_path: Path) -> bool:
+        """حفظ ملف SRT بترميز UTF-8 مع BOM لدعم أفضل للعربية"""
+        try:
+            # إضافة BOM UTF-8 لضمان قراءة صحيحة في جميع المشغلات
+            bom = '\ufeff'
+            with open(file_path, 'w', encoding='utf-8-sig') as f:
+                f.write(bom + content)
+            return True
+        except Exception as e:
+            logger.error(f"Error saving SRT file: {e}")
+            # Fallback: حفظ بدون BOM
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                return True
+            except Exception as e2:
+                logger.error(f"Error saving SRT file (fallback): {e2}")
+                return False
     
     @staticmethod
     def clean_and_merge_segments(segments: List[Dict]) -> List[Dict]:
@@ -547,8 +568,25 @@ class SubtitleProcessor:
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{millisecs:03d}"
     
     @staticmethod
+    def get_arabic_font(font_family: str) -> str:
+        """الحصول على خط عربي مناسب"""
+        # قائمة بالخطوط العربية المدعومة بشكل جيد
+        arabic_fonts = [
+            'Arial', 'Tahoma', 'DejaVu Sans', 'Segoe UI', 'Noto Sans Arabic',
+            'Cairo', 'Amiri', 'Scheherazade', 'Lateef', 'IBM Plex Sans Arabic'
+        ]
+        
+        # إذا كان الخط المطلوب في القائمة، استخدمه
+        if font_family in arabic_fonts:
+            return font_family
+        
+        # محاولة اكتشاف خطوط عربية متاحة
+        # استخدام Arial أو Tahoma كافتراضي (متوفران في معظم الأنظمة)
+        return 'Arial'  # Arial يدعم العربية بشكل جيد
+    
+    @staticmethod
     def create_ass(srt_content: str, settings: Dict) -> str:
-        """إنشاء ملف ASS مع إعدادات مخصصة"""
+        """إنشاء ملف ASS مع إعدادات مخصصة ودعم كامل للعربية"""
         # تحويل جميع القيم إلى الأنواع الصحيحة
         font_size = int(settings.get('fontSize', settings.get('font_size', 24)))
         font_color = str(settings.get('fontColor', settings.get('font_color', '#FFFFFF')))
@@ -566,6 +604,9 @@ class SubtitleProcessor:
         
         position = str(settings.get('position', 'bottom'))
         font_family = str(settings.get('fontFamily', settings.get('font_name', 'Arial')))
+        
+        # استخدام خط عربي مناسب
+        arabic_font = SubtitleProcessor.get_arabic_font(font_family)
         
         # التأكد من أن bg_opacity في النطاق الصحيح (0-255)
         bg_opacity = max(0, min(255, int(bg_opacity)))
@@ -589,14 +630,21 @@ class SubtitleProcessor:
         bg_color_part = bg_color_bgr[3:] if len(bg_color_bgr) > 3 else bg_color_bgr
         back_colour = "&H" + bg_opacity_hex + bg_color_part
         
-        # استخدام string concatenation لتجنب مشاكل f-string مع الأحرف الخاصة
+        # إنشاء ASS header مع دعم UTF-8 للعربية
+        # Encoding: 1 = UTF-8 (مهم للعربية)
         ass_header = """[Script Info]
 Title: Generated Subtitles
 ScriptType: v4.00+
+WrapStyle: 0
+ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,""" + str(font_family) + "," + str(font_size) + "," + str(primary_color) + ",&H000000FF,&H00000000," + str(back_colour) + ",0,0,0,0,100,100,0,0,3,2,1," + str(alignment) + ",10,10," + str(margin_v) + ",1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
+Style: Default,""" + str(arabic_font) + "," + str(font_size) + "," + str(primary_color) + ",&H000000FF,&H00000000," + str(back_colour) + ",0,0,0,0,100,100,0,0,3,2,1," + str(alignment) + ",10,10," + str(margin_v) + """,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
         
         events = []
         lines = srt_content.strip().split('\n')
@@ -690,7 +738,8 @@ class VideoProcessor:
                     ass_content = SubtitleProcessor.create_ass(srt_content, settings)
                     ass_path = subtitle_path.replace('.srt', '.ass')
                     
-                    with open(ass_path, 'w', encoding='utf-8') as f:
+                    # حفظ ASS بترميز UTF-8 مع BOM لدعم العربية
+                    with open(ass_path, 'w', encoding='utf-8-sig') as f:
                         f.write(ass_content)
                     
                     subtitle_path = str(Path(ass_path).resolve())
@@ -716,7 +765,7 @@ class VideoProcessor:
                 # استخدام ass filter لـ ASS
                 vf_filter = f"ass={subtitle_path_escaped}"
             
-            # محاولة استخدام ass filter أولاً (أفضل للترجمة الوقتية)
+            # محاولة استخدام ass filter أو subtitles filter مع دعم UTF-8 للعربية
             cmd = [
                 'ffmpeg',
                 '-i', video_path,
@@ -726,6 +775,7 @@ class VideoProcessor:
                 '-preset', 'fast',
                 '-crf', '23',
                 '-threads', '0',
+                '-sub_charenc', 'UTF-8',  # تحديد ترميز الترجمة كـ UTF-8
                 '-y',
                 output_path
             ]
@@ -749,7 +799,8 @@ class VideoProcessor:
                     ass_content = SubtitleProcessor.create_ass(srt_content, settings)
                     ass_path = subtitle_path.replace('.srt', '.ass')
                     
-                    with open(ass_path, 'w', encoding='utf-8') as f:
+                    # حفظ ASS بترميز UTF-8 مع BOM لدعم العربية
+                    with open(ass_path, 'w', encoding='utf-8-sig') as f:
                         f.write(ass_content)
                     
                     ass_path_escaped = str(Path(ass_path).resolve()).replace('\\', '\\\\').replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:')
@@ -764,6 +815,7 @@ class VideoProcessor:
                         '-preset', 'fast',
                         '-crf', '23',
                         '-threads', '0',
+                        '-sub_charenc', 'UTF-8',  # تحديد ترميز الترجمة كـ UTF-8
                         '-y',
                         output_path
                     ]
@@ -1786,13 +1838,12 @@ def api_instant_translate():
                             srt_lines.append("")
                         subtitle_text = '\n'.join(srt_lines)
             
-            # إنشاء ملف SRT
+            # إنشاء ملف SRT بترميز UTF-8 مع BOM لدعم أفضل للعربية
             srt_path = Path(app.config['SUBTITLE_FOLDER']) / f"subtitle_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
-            with open(srt_path, 'w', encoding='utf-8') as f:
-                f.write(subtitle_text)
+            SubtitleProcessor.save_srt_file(subtitle_text, srt_path)
             
             segment_count = len([s for s in subtitle_text.split('\n\n') if s.strip()])
-            logger.info(f"Created SRT file: {srt_path} with {segment_count} segments")
+            logger.info(f"Created SRT file: {srt_path} with {segment_count} segments (UTF-8 with BOM)")
             
             # دمج
             output_file = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
