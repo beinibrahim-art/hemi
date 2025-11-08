@@ -799,21 +799,28 @@ class VideoProcessor:
             import platform
             
             # استخدام المسار المطلق مباشرة
-            # على Linux/Mac، escape المسافات والأحرف الخاصة
+            # على Linux/Mac، subtitles filter يحتاج escape بسيط
+            # على Windows، escape مختلف
+            
+            # طريقة أفضل: استخدام subtitles filter مع المسار المطلق مباشرة
+            # ffmpeg يتعامل مع المسارات بشكل جيد إذا كانت مطلقة
+            subtitle_path_abs = str(Path(subtitle_path).resolve())
+            
             if platform.system() == 'Windows':
-                # على Windows، استخدام المسار كما هو مع escape للـ :
-                subtitle_path_escaped = subtitle_path.replace('\\', '/').replace(':', '\\:')
+                # على Windows، تحويل المسار إلى format مناسب
+                subtitle_path_escaped = subtitle_path_abs.replace('\\', '/').replace(':', '\\:')
             else:
-                # على Linux/Mac، escape المسافات والأحرف الخاصة بشكل صحيح
-                # استخدام shlex.quote أو escape يدوي
-                subtitle_path_escaped = subtitle_path.replace('\\', '\\\\').replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:').replace("'", "\\'")
+                # على Linux/Mac، escape المسافات والأحرف الخاصة فقط
+                # لكن بشكل بسيط - escape المسافات فقط
+                subtitle_path_escaped = subtitle_path_abs.replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]')
             
             # دمج مع الفيديو
             # استخدام subtitles filter لـ SRT (أفضل للترجمة الفورية)
             # أو ass filter لـ ASS (للتحكم الكامل في التنسيق)
+            # استخدام المسار المطلق مع escape بسيط (بدون quotes لأن subprocess لا يفسرها)
             if subtitle_path.endswith('.srt'):
                 # استخدام subtitles filter لـ SRT
-                # استخدام format صحيح للمسار
+                # escape المسار بشكل صحيح
                 vf_filter = f"subtitles={subtitle_path_escaped}"
             else:
                 # استخدام ass filter لـ ASS
@@ -845,10 +852,21 @@ class VideoProcessor:
             logger.info(f"Video file: {video_path}, exists: {os.path.exists(video_path)}")
             logger.info(f"Subtitle file: {subtitle_path}, exists: {os.path.exists(subtitle_path)}")
             logger.info(f"Output file: {output_path}")
+            logger.info(f"Video filter: {vf_filter}")
             
             # التأكد من وجود مجلد الإخراج
             output_dir = Path(output_path).parent
             output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # التأكد من أن ملف الفيديو موجود
+            if not os.path.exists(video_path):
+                logger.error(f"Video file does not exist: {video_path}")
+                return False
+            
+            # التأكد من أن ملف الترجمة موجود
+            if not os.path.exists(subtitle_path):
+                logger.error(f"Subtitle file does not exist: {subtitle_path}")
+                return False
             
             process = subprocess.run(cmd, capture_output=True, timeout=600, text=True)
             
@@ -872,10 +890,11 @@ class VideoProcessor:
                         f.write(ass_content)
                     
                     # Escape المسار بشكل صحيح
+                    ass_path_abs = str(Path(ass_path).resolve())
                     if platform.system() == 'Windows':
-                        ass_path_escaped = str(Path(ass_path).resolve()).replace('\\', '/').replace(':', '\\:')
+                        ass_path_escaped = ass_path_abs.replace('\\', '/').replace(':', '\\:')
                     else:
-                        ass_path_escaped = str(Path(ass_path).resolve()).replace('\\', '\\\\').replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:').replace("'", "\\'")
+                        ass_path_escaped = ass_path_abs.replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]')
                     vf_filter_alt = f"ass={ass_path_escaped}"
                     
                     cmd_alt = [
