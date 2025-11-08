@@ -241,6 +241,135 @@ class SubtitleProcessor:
     """معالج الترجمة المحسّن"""
     
     @staticmethod
+    def improve_sync_with_words(segments: List[Dict], translated_segments: List[Dict]) -> List[Dict]:
+        """
+        تحسين المزامنة باستخدام word-level timestamps
+        يحسب التوقيتات بناءً على طول النص المترجم مقارنة بالنص الأصلي
+        """
+        improved_segments = []
+        
+        for i, orig_seg in enumerate(segments):
+            if i >= len(translated_segments):
+                break
+            
+            orig_text = orig_seg.get('text', '').strip()
+            orig_start = float(orig_seg.get('start', 0))
+            orig_end = float(orig_seg.get('end', orig_start + 3))
+            orig_duration = orig_end - orig_start
+            
+            trans_seg = translated_segments[i]
+            trans_text = trans_seg.get('text', '').strip()
+            
+            if not orig_text or not trans_text:
+                continue
+            
+            # استخدام word-level timestamps إذا كانت متوفرة
+            orig_words = orig_seg.get('words', [])
+            
+            if orig_words and len(orig_words) > 0:
+                # حساب التوقيتات بناءً على الكلمات
+                orig_word_count = len(orig_text.split())
+                trans_word_count = len(trans_text.split())
+                
+                # إذا كان النص المترجم أطول، نمدد المدة قليلاً
+                # إذا كان أقصر، نحافظ على المدة الأصلية
+                if trans_word_count > 0 and orig_word_count > 0:
+                    word_ratio = trans_word_count / orig_word_count
+                    # تعديل المدة بناءً على النسبة (مع حد أقصى 1.5x)
+                    adjusted_duration = orig_duration * min(1.5, max(0.5, word_ratio))
+                    adjusted_end = orig_start + adjusted_duration
+                else:
+                    adjusted_end = orig_end
+                
+                improved_segments.append({
+                    'start': orig_start,
+                    'end': adjusted_end,
+                    'text': trans_text
+                })
+            else:
+                # بدون word timestamps، استخدام النسبة بناءً على عدد الأحرف
+                orig_char_count = len(orig_text)
+                trans_char_count = len(trans_text)
+                
+                if orig_char_count > 0 and trans_char_count > 0:
+                    char_ratio = trans_char_count / orig_char_count
+                    # تعديل المدة بناءً على النسبة (مع حد أقصى 1.5x)
+                    adjusted_duration = orig_duration * min(1.5, max(0.5, char_ratio))
+                    adjusted_end = orig_start + adjusted_duration
+                else:
+                    adjusted_end = orig_end
+                
+                improved_segments.append({
+                    'start': orig_start,
+                    'end': adjusted_end,
+                    'text': trans_text
+                })
+        
+        return improved_segments
+    
+    @staticmethod
+    def smart_split_translation(original_segments: List[Dict], translated_text: str) -> List[Dict]:
+        """
+        تقسيم ذكي للترجمة مع الحفاظ على المزامنة
+        يقسم النص المترجم بناءً على segments الأصلية مع تحسين التوقيتات
+        """
+        translated_segments = []
+        
+        # تقسيم النص المترجم بناءً على عدد segments الأصلية
+        orig_total_words = sum(len(seg.get('text', '').split()) for seg in original_segments)
+        trans_words = translated_text.split()
+        
+        if orig_total_words == 0 or len(trans_words) == 0:
+            return translated_segments
+        
+        # حساب عدد الكلمات لكل segment
+        word_index = 0
+        for i, orig_seg in enumerate(original_segments):
+            orig_text = orig_seg.get('text', '').strip()
+            orig_start = float(orig_seg.get('start', 0))
+            orig_end = float(orig_seg.get('end', orig_start + 3))
+            orig_duration = orig_end - orig_start
+            
+            if not orig_text:
+                continue
+            
+            orig_word_count = len(orig_text.split())
+            
+            # حساب عدد الكلمات المترجمة المقابلة
+            # بناءً على نسبة الكلمات الإجمالية
+            if orig_total_words > 0:
+                segment_ratio = orig_word_count / orig_total_words
+                trans_word_count = max(1, int(len(trans_words) * segment_ratio))
+            else:
+                trans_word_count = orig_word_count
+            
+            # أخذ الكلمات المترجمة المقابلة
+            trans_segment_words = trans_words[word_index:word_index + trans_word_count]
+            trans_segment_text = ' '.join(trans_segment_words).strip()
+            
+            if trans_segment_text:
+                # تحسين التوقيت بناءً على طول النص المترجم
+                orig_char_count = len(orig_text)
+                trans_char_count = len(trans_segment_text)
+                
+                if orig_char_count > 0:
+                    char_ratio = trans_char_count / orig_char_count
+                    adjusted_duration = orig_duration * min(1.5, max(0.5, char_ratio))
+                    adjusted_end = orig_start + adjusted_duration
+                else:
+                    adjusted_end = orig_end
+                
+                translated_segments.append({
+                    'start': orig_start,
+                    'end': adjusted_end,
+                    'text': trans_segment_text
+                })
+                
+                word_index += trans_word_count
+        
+        return translated_segments
+    
+    @staticmethod
     def split_long_segments(segments: List[Dict], max_duration: float = 5.0, 
                            max_chars: int = 80) -> List[Dict]:
         """تقسيم segments الطويلة بذكاء"""
@@ -1419,9 +1548,21 @@ def api_instant_translate():
                 
                 # الحالة المثلى: استخدام segments المترجمة مع التوقيتات
                 if translated_segments_data and translated_segments_data.get('translated_segments'):
-                    segments = translated_segments_data['translated_segments']
+                    translated_segments = translated_segments_data['translated_segments']
+                    
+                    # إذا كانت هناك segments أصلية، نحسن المزامنة
+                    if transcript_data and transcript_data.get('segments'):
+                        original_segments = transcript_data['segments']
+                        # تحسين المزامنة باستخدام word-level timestamps
+                        improved_segments = SubtitleProcessor.improve_sync_with_words(
+                            original_segments, 
+                            translated_segments
+                        )
+                    else:
+                        improved_segments = translated_segments
+                    
                     srt_lines = []
-                    for i, seg in enumerate(segments, 1):
+                    for i, seg in enumerate(improved_segments, 1):
                         start = float(seg.get('start', 0))
                         end = float(seg.get('end', start + 3))
                         text = seg.get('text', '').strip()
@@ -1441,46 +1582,67 @@ def api_instant_translate():
                 # الحالة الثانية: استخدام segments من transcript مع النص المترجم
                 elif transcript_data and transcript_data.get('segments'):
                     segments = transcript_data['segments']
-                    # تقسيم النص المترجم إلى جمل (محاولة ذكية)
                     translated_text = subtitle_text.strip()
                     
-                    # إذا كان النص المترجم يحتوي على فواصل، استخدمها
-                    if '\n' in translated_text:
-                        translated_lines = [line.strip() for line in translated_text.split('\n') if line.strip()]
-                    else:
-                        # تقسيم ذكي حسب عدد segments
-                        words = translated_text.split()
-                        if len(words) > 0 and len(segments) > 0:
-                            words_per_segment = max(1, len(words) // len(segments))
-                            translated_lines = []
-                            for i in range(0, len(words), words_per_segment):
-                                translated_lines.append(' '.join(words[i:i+words_per_segment]))
-                        else:
-                            translated_lines = [translated_text]
+                    # استخدام التقسيم الذكي للترجمة مع تحسين المزامنة
+                    translated_segments = SubtitleProcessor.smart_split_translation(segments, translated_text)
                     
-                    srt_lines = []
-                    for i, seg in enumerate(segments):
-                        start = float(seg.get('start', 0))
-                        end = float(seg.get('end', start + 3))
+                    if translated_segments:
+                        # تحسين المزامنة باستخدام word-level timestamps إذا كانت متوفرة
+                        improved_segments = SubtitleProcessor.improve_sync_with_words(segments, translated_segments)
                         
-                        # استخدام النص المترجم المقابل
-                        if i < len(translated_lines):
-                            text = translated_lines[i]
-                        else:
-                            # إذا لم يكن هناك نص مترجم كافٍ، استخدم النص الأصلي
+                        srt_lines = []
+                        for i, seg in enumerate(improved_segments, 1):
+                            start = float(seg.get('start', 0))
+                            end = float(seg.get('end', start + 3))
                             text = seg.get('text', '').strip()
-                        
-                        if text:
-                            start_str = SubtitleProcessor._format_time(start)
-                            end_str = SubtitleProcessor._format_time(end)
                             
-                            srt_lines.append(f"{len(srt_lines) // 4 + 1}")
-                            srt_lines.append(f"{start_str} --> {end_str}")
-                            srt_lines.append(text)
-                            srt_lines.append("")
-                    
-                    if srt_lines:
-                        subtitle_text = '\n'.join(srt_lines)
+                            if text:
+                                start_str = SubtitleProcessor._format_time(start)
+                                end_str = SubtitleProcessor._format_time(end)
+                                
+                                srt_lines.append(f"{i}")
+                                srt_lines.append(f"{start_str} --> {end_str}")
+                                srt_lines.append(text)
+                                srt_lines.append("")
+                        
+                        if srt_lines:
+                            subtitle_text = '\n'.join(srt_lines)
+                    else:
+                        # Fallback: تقسيم بسيط
+                        if '\n' in translated_text:
+                            translated_lines = [line.strip() for line in translated_text.split('\n') if line.strip()]
+                        else:
+                            words = translated_text.split()
+                            if len(words) > 0 and len(segments) > 0:
+                                words_per_segment = max(1, len(words) // len(segments))
+                                translated_lines = []
+                                for i in range(0, len(words), words_per_segment):
+                                    translated_lines.append(' '.join(words[i:i+words_per_segment]))
+                            else:
+                                translated_lines = [translated_text]
+                        
+                        srt_lines = []
+                        for i, seg in enumerate(segments):
+                            start = float(seg.get('start', 0))
+                            end = float(seg.get('end', start + 3))
+                            
+                            if i < len(translated_lines):
+                                text = translated_lines[i]
+                            else:
+                                text = seg.get('text', '').strip()
+                            
+                            if text:
+                                start_str = SubtitleProcessor._format_time(start)
+                                end_str = SubtitleProcessor._format_time(end)
+                                
+                                srt_lines.append(f"{len(srt_lines) // 4 + 1}")
+                                srt_lines.append(f"{start_str} --> {end_str}")
+                                srt_lines.append(text)
+                                srt_lines.append("")
+                        
+                        if srt_lines:
+                            subtitle_text = '\n'.join(srt_lines)
                     else:
                         # Fallback: تحويل النص العادي إلى SRT بسيط
                         lines = subtitle_text.split('\n')
