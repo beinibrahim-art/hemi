@@ -739,9 +739,9 @@ class VideoProcessor:
                     codec = probe_result.stdout.strip().lower()
                     
                     # إذا لم يكن H.264، قم بالتحويل أولاً
-                    if codec != 'h264':
+                    if codec and codec != 'h264':
                         logger.info(f"Converting source video to H.264 before merge: {codec} -> h264")
-                        temp_h264 = video_file.parent / f"{video_file.stem}_temp_h264.mp4"
+                        temp_h264 = video_file.parent / f"{video_file.stem}_temp_h264_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
                         convert_cmd = [
                             'ffmpeg',
                             '-i', str(video_file),
@@ -755,12 +755,18 @@ class VideoProcessor:
                             '-y',
                             str(temp_h264)
                         ]
+                        logger.info(f"Converting video: {' '.join(convert_cmd)}")
                         convert_result = subprocess.run(convert_cmd, capture_output=True, timeout=300, text=True)
                         if convert_result.returncode == 0 and temp_h264.exists():
                             video_path = str(temp_h264)
                             logger.info(f"Source video converted to H.264: {temp_h264}")
+                        else:
+                            logger.warning(f"Video conversion failed or incomplete: {convert_result.stderr}")
+                            # المتابعة مع الفيديو الأصلي
+                    else:
+                        logger.info(f"Video already H.264: {codec}")
                 except Exception as e:
-                    logger.warning(f"Could not check/convert source video codec: {e}, proceeding anyway")
+                    logger.warning(f"Could not check/convert source video codec: {e}, proceeding with original video")
             
             # استخدام SRT مباشرة إذا كان متوفراً، أو تحويله إلى ASS
             # SRT أفضل للترجمة الفورية لأنه أبسط وأكثر دقة
@@ -784,22 +790,30 @@ class VideoProcessor:
                     
                     subtitle_path = str(Path(ass_path).resolve())
             
+            # التأكد من وجود ملف الترجمة
+            if not os.path.exists(subtitle_path):
+                logger.error(f"Subtitle file does not exist: {subtitle_path}")
+                return False
+            
             # Escape المسار للـ ffmpeg بشكل صحيح
             import platform
             
-            # Escape المسار بشكل آمن على جميع الأنظمة
+            # استخدام المسار المطلق مباشرة
+            # على Linux/Mac، escape المسافات والأحرف الخاصة
             if platform.system() == 'Windows':
                 # على Windows، استخدام المسار كما هو مع escape للـ :
                 subtitle_path_escaped = subtitle_path.replace('\\', '/').replace(':', '\\:')
             else:
-                # على Linux/Mac، escape المسافات والأحرف الخاصة
-                subtitle_path_escaped = subtitle_path.replace('\\', '\\\\').replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:')
+                # على Linux/Mac، escape المسافات والأحرف الخاصة بشكل صحيح
+                # استخدام shlex.quote أو escape يدوي
+                subtitle_path_escaped = subtitle_path.replace('\\', '\\\\').replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:').replace("'", "\\'")
             
             # دمج مع الفيديو
             # استخدام subtitles filter لـ SRT (أفضل للترجمة الفورية)
             # أو ass filter لـ ASS (للتحكم الكامل في التنسيق)
             if subtitle_path.endswith('.srt'):
                 # استخدام subtitles filter لـ SRT
+                # استخدام format صحيح للمسار
                 vf_filter = f"subtitles={subtitle_path_escaped}"
             else:
                 # استخدام ass filter لـ ASS
@@ -828,13 +842,20 @@ class VideoProcessor:
             ]
             
             logger.info(f"Running ffmpeg command: {' '.join(cmd)}")
-            logger.info(f"Subtitle file: {subtitle_path}")
-            logger.info(f"Subtitle file exists: {os.path.exists(subtitle_path)}")
+            logger.info(f"Video file: {video_path}, exists: {os.path.exists(video_path)}")
+            logger.info(f"Subtitle file: {subtitle_path}, exists: {os.path.exists(subtitle_path)}")
+            logger.info(f"Output file: {output_path}")
+            
+            # التأكد من وجود مجلد الإخراج
+            output_dir = Path(output_path).parent
+            output_dir.mkdir(parents=True, exist_ok=True)
             
             process = subprocess.run(cmd, capture_output=True, timeout=600, text=True)
             
             if process.returncode != 0:
-                logger.error(f"FFmpeg error: {process.stderr}")
+                logger.error(f"FFmpeg error (return code: {process.returncode}):")
+                logger.error(f"STDERR: {process.stderr}")
+                logger.error(f"STDOUT: {process.stdout}")
                 
                 # إذا كان يستخدم subtitles filter وفشل، جرب ass filter
                 if subtitle_path.endswith('.srt'):
@@ -850,7 +871,11 @@ class VideoProcessor:
                     with open(ass_path, 'w', encoding='utf-8-sig') as f:
                         f.write(ass_content)
                     
-                    ass_path_escaped = str(Path(ass_path).resolve()).replace('\\', '\\\\').replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:')
+                    # Escape المسار بشكل صحيح
+                    if platform.system() == 'Windows':
+                        ass_path_escaped = str(Path(ass_path).resolve()).replace('\\', '/').replace(':', '\\:')
+                    else:
+                        ass_path_escaped = str(Path(ass_path).resolve()).replace('\\', '\\\\').replace(' ', '\\ ').replace('[', '\\[').replace(']', '\\]').replace(':', '\\:').replace("'", "\\'")
                     vf_filter_alt = f"ass={ass_path_escaped}"
                     
                     cmd_alt = [
@@ -873,19 +898,33 @@ class VideoProcessor:
                         output_path
                     ]
                     
+                    logger.info(f"Trying alternative command: {' '.join(cmd_alt)}")
                     process_alt = subprocess.run(cmd_alt, capture_output=True, timeout=600, text=True)
                     
                     if process_alt.returncode != 0:
-                        logger.error(f"FFmpeg error (ass filter): {process_alt.stderr}")
+                        logger.error(f"FFmpeg error (ass filter, return code: {process_alt.returncode}):")
+                        logger.error(f"STDERR: {process_alt.stderr}")
+                        logger.error(f"STDOUT: {process_alt.stdout}")
                         return False
                     else:
-                        logger.info("Successfully merged with ass filter")
-                        return True
+                        if output_path.exists():
+                            logger.info("Successfully merged with ass filter")
+                            return True
+                        else:
+                            logger.error("ASS filter succeeded but output file not found")
+                            return False
                 else:
+                    logger.error("Not an SRT file, cannot try ASS fallback")
                     return False
             
-            logger.info(f"Successfully merged subtitles using {'subtitles' if subtitle_path.endswith('.srt') else 'ass'} filter")
-            return True
+            # التحقق من نجاح العملية
+            if output_path.exists():
+                file_size = output_path.stat().st_size
+                logger.info(f"Successfully merged subtitles using {'subtitles' if subtitle_path.endswith('.srt') else 'ass'} filter. Output size: {file_size} bytes")
+                return True
+            else:
+                logger.error(f"FFmpeg succeeded but output file not found: {output_path}")
+                return False
             
         except Exception as e:
             logger.error(f"Subtitle merge failed: {e}")
