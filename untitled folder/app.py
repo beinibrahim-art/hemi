@@ -715,12 +715,52 @@ class VideoProcessor:
     @staticmethod
     def merge_subtitles(video_path: str, subtitle_path: str, 
                        output_path: str, settings: Dict) -> bool:
-        """دمج الترجمة مع الفيديو"""
+        """دمج الترجمة مع الفيديو - مع تحويل إجباري إلى H.264"""
         try:
             # التأكد من أن المسارات مطلقة
             video_path = str(Path(video_path).resolve())
             subtitle_path = str(Path(subtitle_path).resolve())
             output_path = str(Path(output_path).resolve())
+            
+            # تحويل الفيديو إلى H.264 قبل الدمج إذا لم يكن كذلك
+            video_file = Path(video_path)
+            if video_file.exists():
+                try:
+                    # التحقق من codec
+                    probe_cmd = [
+                        'ffprobe',
+                        '-v', 'error',
+                        '-select_streams', 'v:0',
+                        '-show_entries', 'stream=codec_name',
+                        '-of', 'default=noprint_wrappers=1:nokey=1',
+                        str(video_file)
+                    ]
+                    probe_result = subprocess.run(probe_cmd, capture_output=True, timeout=10, text=True)
+                    codec = probe_result.stdout.strip().lower()
+                    
+                    # إذا لم يكن H.264، قم بالتحويل أولاً
+                    if codec != 'h264':
+                        logger.info(f"Converting source video to H.264 before merge: {codec} -> h264")
+                        temp_h264 = video_file.parent / f"{video_file.stem}_temp_h264.mp4"
+                        convert_cmd = [
+                            'ffmpeg',
+                            '-i', str(video_file),
+                            '-c:v', 'libx264',
+                            '-profile:v', 'high',
+                            '-level', '4.0',
+                            '-pix_fmt', 'yuv420p',
+                            '-c:a', 'aac',
+                            '-b:a', '128k',
+                            '-movflags', '+faststart',
+                            '-y',
+                            str(temp_h264)
+                        ]
+                        convert_result = subprocess.run(convert_cmd, capture_output=True, timeout=300, text=True)
+                        if convert_result.returncode == 0 and temp_h264.exists():
+                            video_path = str(temp_h264)
+                            logger.info(f"Source video converted to H.264: {temp_h264}")
+                except Exception as e:
+                    logger.warning(f"Could not check/convert source video codec: {e}, proceeding anyway")
             
             # استخدام SRT مباشرة إذا كان متوفراً، أو تحويله إلى ASS
             # SRT أفضل للترجمة الفورية لأنه أبسط وأكثر دقة
@@ -1272,8 +1312,9 @@ class SmartMediaDownloader:
                     video_files.sort(key=lambda x: x[1], reverse=True)
                     downloaded_file = str(video_files[0][0])
                     
-                    # تحويل إلى MP4 H.264 إذا لم يكن كذلك
-                    if downloaded_file and not downloaded_file.endswith('.mp3'):
+                    # تحويل إجباري إلى MP4 H.264 لضمان التوافق
+                    if downloaded_file and not downloaded_file.endswith('.mp3') and not downloaded_file.endswith('.m4a'):
+                        logger.info(f"Ensuring H.264 encoding for: {downloaded_file}")
                         downloaded_file = self._ensure_mp4_h264(downloaded_file)
                 
                 download_progress[download_id] = {
@@ -1307,10 +1348,13 @@ class SmartMediaDownloader:
                 cmd.extend(['-x', '--audio-format', 'mp3', '--audio-quality', '0'])
             else:
                 # إجبار MP4 H.264 متوافق مع جميع الأجهزة
+                # استخدام format selector يفضل H.264
+                # وإجبار إعادة الترميز إلى H.264
                 cmd.extend([
                     '-f', format_cmd,
                     '--merge-output-format', 'mp4',
-                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart'
+                    '--recode-video', 'mp4',  # إجبار إعادة الترميز إلى MP4
+                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart -strict experimental'
                 ])
             
             cmd.extend([
@@ -1342,7 +1386,8 @@ class SmartMediaDownloader:
                 cmd.extend([
                     '-f', format_cmd,
                     '--merge-output-format', 'mp4',
-                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart'
+                    '--recode-video', 'mp4',  # إجبار إعادة الترميز إلى MP4
+                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart -strict experimental'
                 ])
             
             cmd.extend(['-o', output_template, '--no-warnings', url])
@@ -1369,7 +1414,8 @@ class SmartMediaDownloader:
                 cmd.extend([
                     '-f', 'best[ext=mp4]/best',
                     '--merge-output-format', 'mp4',
-                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart'
+                    '--recode-video', 'mp4',  # إجبار إعادة الترميز إلى MP4
+                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart -strict experimental'
                 ])
             
             cmd.extend(['-o', output_template, '--no-warnings', url])
@@ -1395,7 +1441,8 @@ class SmartMediaDownloader:
                 # إجبار MP4 H.264 متوافق مع جميع الأجهزة
                 cmd.extend([
                     '--merge-output-format', 'mp4',
-                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart'
+                    '--recode-video', 'mp4',  # إجبار إعادة الترميز إلى MP4
+                    '--postprocessor-args', 'ffmpeg:-c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart -strict experimental'
                 ])
             
             cmd.extend(['-o', output_template, '--no-warnings', url])
@@ -1431,52 +1478,76 @@ class SmartMediaDownloader:
             return False
     
     def _ensure_mp4_h264(self, video_path: str) -> str:
-        """تحويل الفيديو إلى MP4 H.264 متوافق مع جميع الأجهزة"""
+        """تحويل الفيديو إلى MP4 H.264 متوافق مع جميع الأجهزة - إجباري دائماً"""
         try:
             video_file = Path(video_path)
             
-            # إذا كان الملف MP4 بالفعل، تحقق من codec
-            if video_file.suffix.lower() == '.mp4':
-                # محاولة التحقق من codec (اختياري - يمكن تخطيه للسرعة)
-                return str(video_file)
+            # إنشاء اسم ملف جديد
+            output_file = video_file.parent / f"{video_file.stem}_h264.mp4"
             
-            # تحويل إلى MP4 H.264
-            output_file = video_file.with_suffix('.mp4')
-            if output_file == video_file:
-                # إذا كان نفس الملف، أنشئ ملف جديد
-                output_file = video_file.parent / f"{video_file.stem}_converted.mp4"
+            # التحقق من codec الحالي
+            needs_conversion = True
+            try:
+                probe_cmd = [
+                    'ffprobe',
+                    '-v', 'error',
+                    '-select_streams', 'v:0',
+                    '-show_entries', 'stream=codec_name,codec_type',
+                    '-of', 'json',
+                    str(video_file)
+                ]
+                probe_result = subprocess.run(probe_cmd, capture_output=True, timeout=10, text=True)
+                if probe_result.returncode == 0:
+                    import json
+                    probe_data = json.loads(probe_result.stdout)
+                    streams = probe_data.get('streams', [])
+                    for stream in streams:
+                        if stream.get('codec_type') == 'video':
+                            codec = stream.get('codec_name', '').lower()
+                            # إذا كان H.264 بالفعل و MP4، استخدم الملف الأصلي
+                            if codec == 'h264' and video_file.suffix.lower() == '.mp4':
+                                logger.info(f"Video already H.264 MP4, skipping conversion: {video_file}")
+                                return str(video_file)
+                            break
+            except Exception as e:
+                logger.debug(f"Could not probe codec: {e}, will convert anyway")
             
+            # تحويل إجباري إلى MP4 H.264
+            logger.info(f"Converting video to H.264 MP4: {video_file} -> {output_file}")
             cmd = [
                 'ffmpeg',
                 '-i', str(video_file),
-                '-c:v', 'libx264',
-                '-profile:v', 'high',
-                '-level', '4.0',
-                '-pix_fmt', 'yuv420p',
-                '-c:a', 'aac',
-                '-b:a', '128k',
-                '-movflags', '+faststart',
+                '-c:v', 'libx264',  # H.264 codec إجباري
+                '-profile:v', 'high',  # High profile متوافق
+                '-level', '4.0',  # Level 4.0 متوافق
+                '-pix_fmt', 'yuv420p',  # متوافق مع جميع الأجهزة
+                '-c:a', 'aac',  # AAC audio
+                '-b:a', '128k',  # bitrate صوت
+                '-movflags', '+faststart',  # لضمان التشغيل السريع
                 '-y',
                 str(output_file)
             ]
             
-            result = subprocess.run(cmd, capture_output=True, timeout=300, text=True)
+            result = subprocess.run(cmd, capture_output=True, timeout=600, text=True)
             
             if result.returncode == 0 and output_file.exists():
-                # حذف الملف الأصلي إذا كان مختلفاً
+                # حذف الملف الأصلي دائماً بعد التحويل الناجح
                 if output_file != video_file:
                     try:
                         video_file.unlink()
-                    except:
-                        pass
-                logger.info(f"Converted video to MP4 H.264: {output_file}")
+                        logger.info(f"Deleted original file: {video_file}")
+                    except Exception as e:
+                        logger.warning(f"Could not delete original: {e}")
+                logger.info(f"Successfully converted to MP4 H.264: {output_file}")
                 return str(output_file)
             else:
-                logger.warning(f"Conversion failed, using original: {result.stderr}")
+                logger.error(f"Conversion failed: {result.stderr}")
+                # إذا فشل التحويل، حاول استخدام الملف الأصلي
                 return str(video_file)
                 
         except Exception as e:
             logger.error(f"Error converting video: {e}")
+            logger.error(traceback.format_exc())
             return str(video_path)  # إرجاع الملف الأصلي في حالة الفشل
 
 # Initialize downloader
@@ -1524,13 +1595,14 @@ def api_instant_translate():
             else:
                 format_cmd = quality
             
-            # إعدادات yt-dlp مع تحويل إلى MP4 H.264 متوافق
+            # إعدادات yt-dlp مع تحويل إجباري إلى MP4 H.264 متوافق
             ydl_opts = {
                 'format': format_cmd,
                 'outtmpl': str(download_folder / '%(title)s.%(ext)s'),
                 'quiet': True,
                 'no_warnings': True,
                 'merge_output_format': 'mp4',
+                'recode_video': 'mp4',  # إجبار إعادة الترميز إلى MP4
                 'postprocessor_args': {
                     'ffmpeg': [
                         '-c:v', 'libx264',
@@ -1539,7 +1611,8 @@ def api_instant_translate():
                         '-pix_fmt', 'yuv420p',
                         '-c:a', 'aac',
                         '-b:a', '128k',
-                        '-movflags', '+faststart'
+                        '-movflags', '+faststart',
+                        '-strict', 'experimental'
                     ]
                 }
             }
@@ -1568,6 +1641,13 @@ def api_instant_translate():
                         'success': False,
                         'message': 'تم التحميل لكن الملف غير موجود'
                     }), 400
+                
+                # تحويل إجباري إلى MP4 H.264
+                if not filename.endswith('.mp3') and not filename.endswith('.m4a'):
+                    logger.info(f"Converting downloaded video to H.264: {filename}")
+                    converted_file = downloader._ensure_mp4_h264(filename)
+                    if converted_file != filename:
+                        filename = converted_file
                 
                 # استخدام ملف مؤقت
                 temp_file = download_folder / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -2159,13 +2239,14 @@ def api_transcribe_from_url():
         else:
             format_cmd = quality
         
-        # إعدادات yt-dlp مع تحويل إلى MP4 H.264 متوافق
+        # إعدادات yt-dlp مع تحويل إجباري إلى MP4 H.264 متوافق
         ydl_opts = {
             'format': format_cmd,
             'outtmpl': str(download_folder / '%(title)s.%(ext)s'),
             'quiet': True,
             'no_warnings': True,
             'merge_output_format': 'mp4',
+            'recode_video': 'mp4',  # إجبار إعادة الترميز إلى MP4
             'postprocessor_args': {
                 'ffmpeg': [
                     '-c:v', 'libx264',
@@ -2174,7 +2255,8 @@ def api_transcribe_from_url():
                     '-pix_fmt', 'yuv420p',
                     '-c:a', 'aac',
                     '-b:a', '128k',
-                    '-movflags', '+faststart'
+                    '-movflags', '+faststart',
+                    '-strict', 'experimental'
                 ]
             }
         }
@@ -2198,6 +2280,13 @@ def api_transcribe_from_url():
         
         if not os.path.exists(filename):
             return jsonify({'success': False, 'message': 'فشل تحميل الفيديو'}), 400
+        
+        # تحويل إجباري إلى MP4 H.264 قبل المعالجة
+        if not filename.endswith('.mp3') and not filename.endswith('.m4a'):
+            logger.info(f"Converting video to H.264 before processing: {filename}")
+            converted_file = downloader._ensure_mp4_h264(filename)
+            if converted_file != filename:
+                filename = converted_file
         
         # استخراج الصوت
         audio_file = filename.rsplit('.', 1)[0] + '_audio.wav'
