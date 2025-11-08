@@ -1486,7 +1486,7 @@
                 });
 
                 if (!downloadResponse.data.success) {
-                    throw new Error(downloadResponse.data.message);
+                    throw new Error(downloadResponse.data.message || 'فشل التحميل');
                 }
 
                 window.tempVideoFile = downloadResponse.data.temp_file;
@@ -1580,26 +1580,60 @@
                 
             } catch (error) {
                 console.error('Error:', error);
-                showAlert(error.message || 'حدث خطأ أثناء المعالجة', 'danger');
+                
+                // استخراج رسالة الخطأ من الاستجابة
+                let errorMessage = 'حدث خطأ أثناء المعالجة';
+                if (error.response && error.response.data && error.response.data.message) {
+                    errorMessage = error.response.data.message;
+                } else if (error.message) {
+                    errorMessage = error.message;
+                }
+                
+                showAlert(errorMessage, 'danger');
                 resetInstantSteps();
+                
+                // إعادة تعيين الأزرار
+                if (startBtn) startBtn.disabled = false;
             }
-
-            if (startBtn) startBtn.disabled = false;
         };
 
-        function updateInstantProgress(percentage, message) {
+        function updateInstantProgress(percent, statusText) {
             const progressBar = document.getElementById('instantProgressBar');
-            const statusText = document.getElementById('instantStatusText');
+            const statusTextEl = document.getElementById('instantStatusText');
             
             if (progressBar) {
-                progressBar.style.width = percentage + '%';
-                progressBar.textContent = Math.round(percentage) + '%';
+                progressBar.style.width = percent + '%';
+                progressBar.textContent = Math.round(percent) + '%';
             }
             
-            if (statusText && message) {
-                statusText.textContent = message;
+            if (statusTextEl && statusText) {
+                statusTextEl.textContent = statusText;
+            }
+            
+            // Update steps based on progress
+            if (percent < 20) {
+                updateProgressStep(1, 'active');
+            } else if (percent < 40) {
+                updateProgressStep(1, 'completed');
+                updateProgressStep(2, 'active');
+            } else if (percent < 60) {
+                updateProgressStep(2, 'completed');
+                updateProgressStep(3, 'active');
+            } else if (percent < 80) {
+                updateProgressStep(3, 'completed');
+                updateProgressStep(4, 'active');
+            } else if (percent < 100) {
+                updateProgressStep(4, 'completed');
+                updateProgressStep(5, 'active');
+            } else {
+                updateProgressStep(5, 'completed');
+                const progressLineFill = document.getElementById('progressLineFill');
+                if (progressLineFill) progressLineFill.style.width = '100%';
             }
         }
+        
+        // Make it available globally
+        window.updateInstantProgress = updateInstantProgress;
 
         function resetInstantSteps() {
             const progressDiv = document.getElementById('instantProgress');
@@ -1720,31 +1754,6 @@
             document.getElementById('progressLineFill').style.width = progressPercent + '%';
         }
         
-        function updateInstantProgress(percent, statusText) {
-            document.getElementById('instantProgressBar').style.width = percent + '%';
-            document.getElementById('instantProgressBar').textContent = percent + '%';
-            document.getElementById('instantStatusText').textContent = statusText;
-            
-            // Update steps based on progress
-            if (percent < 20) {
-                updateProgressStep(1, 'active');
-            } else if (percent < 40) {
-                updateProgressStep(1, 'completed');
-                updateProgressStep(2, 'active');
-            } else if (percent < 60) {
-                updateProgressStep(2, 'completed');
-                updateProgressStep(3, 'active');
-            } else if (percent < 80) {
-                updateProgressStep(3, 'completed');
-                updateProgressStep(4, 'active');
-            } else if (percent < 100) {
-                updateProgressStep(4, 'completed');
-                updateProgressStep(5, 'active');
-            } else {
-                updateProgressStep(5, 'completed');
-                document.getElementById('progressLineFill').style.width = '100%';
-            }
-        }
         window.updateInstantPreview = updateInstantPreview;
 
         async function loadInstantVideoPreview(videoFile) {

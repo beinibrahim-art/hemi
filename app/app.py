@@ -817,7 +817,13 @@ def api_instant_translate():
                     'temp_file': os.path.basename(temp_file)
                 })
             else:
-                return jsonify({'success': False, 'message': result['message']}), 400
+                # إرجاع رسالة الخطأ بشكل واضح
+                error_message = result.get('message', 'حدث خطأ غير معروف أثناء التحميل')
+                logger.error(f"Download failed: {error_message}")
+                return jsonify({
+                    'success': False,
+                    'message': error_message
+                }), 400
         
         elif step == 'extract_audio':
             video_file = data.get('video_file')
