@@ -124,14 +124,14 @@ class VideoDownloader:
             'format_sort': ['res', 'ext:mp4:m4a', 'codec', 'size'],
         }
         
-        # إعدادات الجودة مع fallback أفضل
+        # إعدادات الجودة مع ضمان mp4 وجودة جيدة
         if quality == 'best':
-            # محاولة أفضل تنسيق متاح مع fallback
-            opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
+            # أفضل جودة mp4 - دعم Mac و Windows (H.264/AVC1)
+            opts['format'] = 'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
         elif quality == '720p' or quality == 'medium':
-            opts['format'] = 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best'
+            opts['format'] = 'bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best'
         elif quality == '480p' or quality == 'low':
-            opts['format'] = 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]/best'
+            opts['format'] = 'bestvideo[height<=480][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best'
         elif quality == 'audio':
             opts['format'] = 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio'
             opts['postprocessors'] = [{
@@ -179,39 +179,44 @@ class VideoDownloader:
                 try:
                     logger.info(f"Trying with player_client: {client}")
                     
-                    # محاولة التحميل مع fallback للتنسيقات - تقليل المحاولات
+                    # محاولة التحميل مع fallback للتنسيقات - تحسين لضمان mp4 وجودة جيدة
                     formats_to_try = []
                     
                     # لـ YouTube Shorts، استخدام تنسيقات أبسط
                     if is_shorts:
                         formats_to_try = [
+                            'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',  # mp4 أولاً
                             'best',  # أفضل تنسيق متاح
                             None  # بدون format محدد
                         ]
                     elif quality == 'best':
                         formats_to_try = [
-                            'best',  # أفضل تنسيق متاح بدون قيود
-                            None  # بدون format محدد - yt-dlp سيختار تلقائياً
+                            'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',  # mp4 مع avc1
+                            'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',  # mp4 عادي
+                            'best',  # أفضل تنسيق متاح
+                            None  # بدون format محدد
                         ]
                     elif quality == '720p' or quality == 'medium':
                         formats_to_try = [
-                            'best[height<=720]',
-                            'best',
+                            'bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
+                            'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
+                            'best[height<=720]/best',
                             None
                         ]
                     elif quality == '480p' or quality == 'low':
                         formats_to_try = [
-                            'best[height<=480]',
-                            'best',
+                            'bestvideo[height<=480][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best',
+                            'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best',
+                            'best[height<=480]/best',
                             None
                         ]
                     elif quality == 'audio':
                         formats_to_try = [
-                            'bestaudio',
+                            'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
                             None
                         ]
                     else:
-                        formats_to_try = [quality, 'best', None]
+                        formats_to_try = [quality, 'best[ext=mp4]/best', 'best', None]
                     
                     for format_str in formats_to_try:
                         try:

@@ -653,13 +653,8 @@
                     
                     <div class="mb-6">
                         <label class="block text-lg font-semibold mb-3">رابط الفيديو/الصوت:</label>
-                        <div class="flex gap-3">
-                            <input type="text" id="downloadUrl" class="input-glass flex-1 px-4 py-3 rounded-xl" 
-                                   placeholder="الصق رابط من YouTube, TikTok, Instagram, Twitter, Facebook...">
-                            <button class="btn-primary-glass px-6 py-3 rounded-xl font-semibold" onclick="checkQualities()">
-                                <i class="bi bi-search"></i> فحص الجودات
-                            </button>
-                        </div>
+                        <input type="text" id="downloadUrl" class="input-glass w-full px-4 py-3 rounded-xl" 
+                               placeholder="الصق رابط من YouTube, TikTok, Instagram, Twitter, Facebook...">
                     </div>
 
                     <div id="qualitySection" class="hidden">
@@ -1889,6 +1884,8 @@
             const qualitySection = document.getElementById('qualitySection');
             const qualitySelector = document.getElementById('qualitySelector');
             
+            if (!qualitySelector) return;
+            
             qualitySelector.innerHTML = '';
             
             if (!qualities || qualities.length === 0) {
@@ -1917,14 +1914,23 @@
                 option.innerHTML = `
                     <div class="text-3xl mb-2">${icon}</div>
                     <div class="font-bold">${quality.label}</div>
-                    <div class="text-xs text-gray-400">${quality.ext.toUpperCase()}</div>
+                    <div class="text-xs text-gray-400">${quality.ext ? quality.ext.toUpperCase() : 'MP4'}</div>
                 `;
                 
-                option.onclick = () => selectDownloadQuality(quality.id);
+                option.onclick = () => {
+                    selectDownloadQuality(quality.id);
+                    // بعد اختيار الجودة، يمكن التحميل مباشرة
+                    const downloadStartBtn = document.getElementById('downloadStartBtn');
+                    if (downloadStartBtn) {
+                        downloadStartBtn.focus();
+                    }
+                };
                 qualitySelector.appendChild(option);
             });
             
-            qualitySection.classList.remove('hidden');
+            if (qualitySection) {
+                qualitySection.classList.remove('hidden');
+            }
         }
 
         window.selectDownloadQuality = function(qualityId) {
@@ -1944,7 +1950,67 @@
                 return;
             }
 
+            const qualitySection = document.getElementById('qualitySection');
+            const qualitySelector = document.getElementById('qualitySelector');
+            const qualityLoading = document.getElementById('qualityLoading');
+            const downloadStartBtn = document.getElementById('downloadStartBtn');
+            
+            // إذا لم يتم اختيار جودة بعد، اعرض خيارات الجودات أولاً
+            if (!selectedQuality || (selectedQuality === 'best' && !qualitySection.classList.contains('quality-selected'))) {
+                // إظهار loading indicator
+                if (qualitySection) {
+                    qualitySection.classList.remove('hidden');
+                    if (qualityLoading) qualityLoading.classList.remove('hidden');
+                    if (qualitySelector) qualitySelector.innerHTML = '';
+                }
+                
+                if (downloadStartBtn) {
+                    downloadStartBtn.disabled = true;
+                    downloadStartBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> جاري فحص الجودات...';
+                }
+
+                try {
+                    const response = await axios.post('/api/get-qualities', { url });
+                    if (response.data.success) {
+                        if (qualityLoading) qualityLoading.classList.add('hidden');
+                        displayQualities(response.data.qualities);
+                        if (response.data.title) {
+                            showAlert(`تم العثور على: ${response.data.title} - اختر الجودة`, 'info');
+                        }
+                        // إضافة علامة أن الجودات تم عرضها
+                        qualitySection.classList.add('quality-selected');
+                    } else {
+                        showAlert(response.data.message || 'فشل فحص الجودات', 'danger');
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    showAlert('خطأ في فحص الجودات: ' + (error.response?.data?.message || error.message), 'danger');
+                    // عرض جودات افتراضية
+                    displayQualities([
+                        { id: 'best', label: 'أفضل جودة', ext: 'mp4' },
+                        { id: 'medium', label: 'جودة متوسطة', ext: 'mp4' },
+                        { id: 'low', label: 'جودة منخفضة', ext: 'mp4' },
+                        { id: 'audio', label: 'صوت فقط', ext: 'mp3' }
+                    ]);
+                    qualitySection.classList.remove('hidden');
+                    qualitySection.classList.add('quality-selected');
+                } finally {
+                    if (downloadStartBtn) {
+                        downloadStartBtn.disabled = false;
+                        downloadStartBtn.innerHTML = '<i class="bi bi-download"></i> ابدأ التحميل';
+                    }
+                    if (qualityLoading) qualityLoading.classList.add('hidden');
+                }
+                return; // توقف هنا حتى يختار المستخدم الجودة
+            }
+
+            // إذا تم اختيار الجودة، ابدأ التحميل
             try {
+                if (downloadStartBtn) {
+                    downloadStartBtn.disabled = true;
+                    downloadStartBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> جاري التحميل...';
+                }
+                
                 const response = await axios.post('/api/download', {
                     url: url,
                     quality: selectedQuality
@@ -1952,13 +2018,24 @@
                 
                 if (response.data.success) {
                     showAlert('تم التحميل بنجاح!', 'success');
-                    window.location.href = `/download/${encodeURIComponent(response.data.file)}`;
+                    const filePath = response.data.file;
+                    let downloadPath = filePath.replace('downloads/', '').replace('downloads\\', '');
+                    // تنظيف المسار
+                    if (downloadPath.includes('/') || downloadPath.includes('\\')) {
+                        downloadPath = downloadPath.split(/[/\\]/).pop();
+                    }
+                    window.location.href = `/download/${encodeURIComponent(downloadPath)}`;
                 } else {
-                    showAlert(response.data.message, 'danger');
+                    showAlert(response.data.message || 'فشل التحميل', 'danger');
                 }
             } catch (error) {
                 console.error('Error:', error);
-                showAlert('خطأ في التحميل', 'danger');
+                showAlert('خطأ في التحميل: ' + (error.response?.data?.message || error.message), 'danger');
+            } finally {
+                if (downloadStartBtn) {
+                    downloadStartBtn.disabled = false;
+                    downloadStartBtn.innerHTML = '<i class="bi bi-download"></i> ابدأ التحميل';
+                }
             }
         };
 
