@@ -2220,6 +2220,12 @@ def api_instant_translate():
             if not subtitle_text.strip().startswith('1\n') and not subtitle_text.strip().startswith('WEBVTT'):
                 # محاولة استخدام segments المترجمة من ملف JSON إذا كانت متوفرة
                 translated_segments_data = None
+                inline_translated_segments = data.get('translated_segments')
+                if inline_translated_segments and isinstance(inline_translated_segments, list):
+                    translated_segments_data = {
+                        'translated_segments': inline_translated_segments,
+                        'text': ' '.join([seg.get('text', '') for seg in inline_translated_segments if seg.get('text')])
+                    }
                 if data.get('temp_translated_file'):
                     temp_translated_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_translated_file']
                     if temp_translated_path.exists() and temp_translated_path.suffix == '.json':
@@ -2231,6 +2237,9 @@ def api_instant_translate():
                 
                 # محاولة استخدام segments من transcript إذا كانت متوفرة
                 transcript_data = None
+                inline_transcript_segments = data.get('transcript_segments')
+                if inline_transcript_segments and isinstance(inline_transcript_segments, list):
+                    transcript_data = {'segments': inline_transcript_segments}
                 if data.get('temp_transcript_file'):
                     temp_transcript_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_transcript_file']
                     if temp_transcript_path.exists():

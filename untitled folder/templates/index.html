@@ -1928,6 +1928,8 @@
                     temp_audio_file: tempAudioFile,
                     temp_transcript_file: tempTranscriptFile,
                     temp_translated_file: tempTranslatedFile,
+                    transcript_segments: Array.isArray(window.transcriptSegments) ? window.transcriptSegments : [],
+                    translated_segments: Array.isArray(window.translatedSegments) ? window.translatedSegments : [],
                     fontSize: fontSize,
                     fontColor: fontColor,
                     bgColor: bgColor,
