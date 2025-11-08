@@ -207,13 +207,71 @@ class EnhancedDownloader:
                 if not info:
                     raise Exception("لم يتم العثور على معلومات الفيديو")
                 
-                # Download the video
-                ydl.download([url])
-                
-                # Get the filename
-                filename = ydl.prepare_filename(info)
+                # Check if file already exists
+                expected_filename = ydl.prepare_filename(info)
                 if quality == 'audio':
-                    filename = filename.rsplit('.', 1)[0] + '.mp3'
+                    expected_filename = expected_filename.rsplit('.', 1)[0] + '.mp3'
+                
+                expected_basename = os.path.basename(expected_filename)
+                existing_file = os.path.join(app.config['DOWNLOAD_FOLDER'], expected_basename)
+                
+                # If file exists, use it
+                if os.path.exists(existing_file):
+                    logger.info(f"File already exists: {existing_file}")
+                    filename = existing_file
+                else:
+                    # Download the video
+                    ydl.download([url])
+                    
+                    # Get the filename - yt-dlp might return relative or absolute path
+                    filename = ydl.prepare_filename(info)
+                    if quality == 'audio':
+                        filename = filename.rsplit('.', 1)[0] + '.mp3'
+                    
+                    # Normalize the path
+                    filename = os.path.normpath(filename)
+                    
+                    # If not absolute path, try to find it in download folder
+                    if not os.path.isabs(filename):
+                        # Try with basename in download folder
+                        basename = os.path.basename(filename)
+                        full_path = os.path.join(app.config['DOWNLOAD_FOLDER'], basename)
+                        if os.path.exists(full_path):
+                            filename = full_path
+                        else:
+                            # Search for the file in download folder
+                            download_folder = app.config['DOWNLOAD_FOLDER']
+                            if os.path.exists(download_folder):
+                                # Get most recently modified video file
+                                video_files = []
+                                for file in os.listdir(download_folder):
+                                    file_path = os.path.join(download_folder, file)
+                                    if os.path.isfile(file_path) and file.endswith(('.mp4', '.webm', '.mkv', '.mp3', '.m4a')):
+                                        video_files.append((file_path, os.path.getmtime(file_path)))
+                                
+                                if video_files:
+                                    # Sort by modification time, get most recent
+                                    video_files.sort(key=lambda x: x[1], reverse=True)
+                                    filename = video_files[0][0]
+                                    logger.info(f"Found video file: {filename}")
+                
+                # Final verification
+                if not os.path.exists(filename):
+                    logger.warning(f"File not found at {filename}, searching download folder...")
+                    download_folder = app.config['DOWNLOAD_FOLDER']
+                    if os.path.exists(download_folder):
+                        all_files = os.listdir(download_folder)
+                        logger.info(f"Files in download folder: {all_files}")
+                        # Try to find any video file
+                        for file in all_files:
+                            file_path = os.path.join(download_folder, file)
+                            if os.path.isfile(file_path) and any(file.lower().endswith(ext) for ext in ['.mp4', '.webm', '.mkv', '.mp3', '.m4a']):
+                                filename = file_path
+                                logger.info(f"Using file: {filename}")
+                                break
+                
+                if not os.path.exists(filename):
+                    raise Exception(f"لم يتم العثور على الملف بعد التحميل: {filename}")
                 
                 result['success'] = True
                 result['message'] = 'تم التحميل بنجاح'
@@ -228,6 +286,7 @@ class EnhancedDownloader:
         except Exception as e:
             result['message'] = f'خطأ في التحميل: {str(e)}'
             logger.error(f"Download error: {e}")
+            logger.error(traceback.format_exc())
             
             # Try alternative method for TikTok
             if platform == 'tiktok':
@@ -786,8 +845,24 @@ def api_instant_translate():
             # Step 2: Extract audio from video
             video_file = data.get('video_file') or session.get('video_file')
             
+            # Handle relative paths
+            if video_file and not os.path.isabs(video_file):
+                # Try different possible locations
+                possible_paths = [
+                    os.path.join(app.config['DOWNLOAD_FOLDER'], video_file),
+                    os.path.join(app.config['UPLOAD_FOLDER'], video_file),
+                    video_file
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        video_file = path
+                        break
+            
             if not video_file or not os.path.exists(video_file):
-                return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
+                logger.error(f"Video file not found: {video_file}")
+                logger.error(f"Download folder: {app.config['DOWNLOAD_FOLDER']}")
+                logger.error(f"Files in download folder: {os.listdir(app.config['DOWNLOAD_FOLDER']) if os.path.exists(app.config['DOWNLOAD_FOLDER']) else 'Folder does not exist'}")
+                return jsonify({'success': False, 'message': f'ملف الفيديو غير موجود: {video_file}'}), 400
             
             # Extract audio using ffmpeg
             audio_file = video_file.rsplit('.', 1)[0] + '_audio.wav'
@@ -803,14 +878,17 @@ def api_instant_translate():
             ]
             
             try:
-                subprocess.run(cmd, check=True, capture_output=True)
+                result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
                 session['audio_file'] = audio_file
                 return jsonify({
                     'success': True,
                     'audio_file': audio_file
                 })
             except subprocess.CalledProcessError as e:
-                return jsonify({'success': False, 'message': f'خطأ في استخراج الصوت: {e}'}), 500
+                logger.error(f"FFmpeg error: {e.stderr}")
+                return jsonify({'success': False, 'message': f'خطأ في استخراج الصوت: {e.stderr}'}), 500
+            except subprocess.TimeoutExpired:
+                return jsonify({'success': False, 'message': 'انتهت مهلة استخراج الصوت'}), 500
                 
         elif step == 'transcribe':
             # Step 3: Transcribe audio
