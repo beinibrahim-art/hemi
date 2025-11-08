@@ -413,47 +413,71 @@ class SubtitleProcessor:
     """معالج الترجمة المتقدم"""
     
     @staticmethod
-    def create_srt(text: str, duration: int = None) -> str:
-        """إنشاء ملف SRT من النص"""
-        lines = text.split('\n')
+    def create_srt(text: str, duration: float = None, segments: List[Dict] = None) -> str:
+        """إنشاء ملف SRT من النص مع توقيتات دقيقة"""
         srt_content = []
         
-        # تقسيم النص إلى أجزاء مناسبة
-        segments = []
+        # If segments with timing are provided, use them
+        if segments:
+            for i, segment in enumerate(segments):
+                start_time = segment.get('start', 0)
+                end_time = segment.get('end', start_time + 3)
+                text_segment = segment.get('text', '')
+                
+                start_str = SubtitleProcessor.seconds_to_srt_time(start_time)
+                end_str = SubtitleProcessor.seconds_to_srt_time(end_time)
+                
+                srt_content.append(f"{i + 1}")
+                srt_content.append(f"{start_str} --> {end_str}")
+                srt_content.append(text_segment)
+                srt_content.append("")
+            
+            return '\n'.join(srt_content)
+        
+        # Otherwise, split text intelligently
+        lines = text.split('\n')
+        segments_list = []
         current_segment = []
         char_count = 0
         
         for line in lines:
+            if not line.strip():
+                continue
             words = line.split()
             for word in words:
                 current_segment.append(word)
                 char_count += len(word) + 1
                 
-                # إنشاء جزء جديد كل 40 حرف تقريباً
-                if char_count >= 40 or word.endswith('.') or word.endswith('!') or word.endswith('?'):
-                    segments.append(' '.join(current_segment))
+                # Create new segment every ~35-45 characters or at punctuation
+                if char_count >= 40 or word.endswith(('.', '!', '?', '،', '؛')):
+                    segments_list.append(' '.join(current_segment))
                     current_segment = []
                     char_count = 0
         
         if current_segment:
-            segments.append(' '.join(current_segment))
+            segments_list.append(' '.join(current_segment))
         
-        # حساب التوقيت لكل جزء
-        if not segments:
+        if not segments_list:
             return ""
         
-        segment_duration = (duration or 60) / len(segments) if duration else 3
+        # Calculate timing based on duration
+        if duration and duration > 0:
+            segment_duration = duration / len(segments_list)
+            # Ensure minimum 2 seconds per segment
+            segment_duration = max(segment_duration, 2.0)
+        else:
+            segment_duration = 3.0
         
-        for i, segment in enumerate(segments):
+        for i, segment in enumerate(segments_list):
             start_time = i * segment_duration
-            end_time = (i + 1) * segment_duration
+            end_time = min((i + 1) * segment_duration, duration) if duration else (i + 1) * segment_duration
             
             start_str = SubtitleProcessor.seconds_to_srt_time(start_time)
             end_str = SubtitleProcessor.seconds_to_srt_time(end_time)
             
             srt_content.append(f"{i + 1}")
             srt_content.append(f"{start_str} --> {end_str}")
-            srt_content.append(segment)
+            srt_content.append(segment.strip())
             srt_content.append("")
         
         return '\n'.join(srt_content)
@@ -578,11 +602,16 @@ class VideoProcessor:
             if not VideoProcessor.check_ffmpeg():
                 raise Exception("ffmpeg غير متوفر. يرجى تثبيته أولاً")
             
+            # Get video duration for better subtitle timing
+            video_duration = VideoProcessor.get_video_duration(video_path)
+            
             # Prepare subtitle filter
             subtitle_filter = VideoProcessor.create_subtitle_filter(subtitle_path, subtitle_settings)
             
             # Prepare quality settings
-            quality_settings = VideoProcessor.get_quality_settings(quality)
+            # IMPORTANT: When using video filter (-vf), we cannot use -c:v copy
+            # We must re-encode the video
+            quality_settings = VideoProcessor.get_quality_settings(quality, use_filter=True)
             
             # Build ffmpeg command
             cmd = [
@@ -590,11 +619,9 @@ class VideoProcessor:
                 '-i', video_path,
                 '-vf', subtitle_filter,
                 '-c:a', 'copy',  # Copy audio without re-encoding
-                '-metadata:s:s:0', 'language=ara',  # Set subtitle language to Arabic
-                '-sub_charenc', 'UTF-8'  # Force UTF-8 encoding
             ]
             
-            # Add quality settings
+            # Add quality settings (video encoding)
             cmd.extend(quality_settings)
             
             # Add output
@@ -618,15 +645,37 @@ class VideoProcessor:
                 result['message'] = 'تم دمج الترجمة بنجاح'
                 result['output_file'] = output_path
             else:
-                raise Exception(f"FFmpeg error: {process.stderr}")
+                error_msg = process.stderr or process.stdout
+                logger.error(f"FFmpeg error: {error_msg}")
+                raise Exception(f"FFmpeg error: {error_msg}")
             
         except subprocess.TimeoutExpired:
             result['message'] = 'انتهت مهلة المعالجة. الملف كبير جداً'
         except Exception as e:
             result['message'] = f'خطأ في دمج الترجمة: {str(e)}'
             logger.error(f"Merge error: {e}")
+            logger.error(traceback.format_exc())
         
         return result
+    
+    @staticmethod
+    def get_video_duration(video_path: str) -> float:
+        """الحصول على مدة الفيديو"""
+        try:
+            cmd = [
+                'ffprobe',
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                video_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                duration = float(result.stdout.strip())
+                return duration
+        except Exception as e:
+            logger.warning(f"Could not get video duration: {e}")
+        return None
     
     @staticmethod
     def check_ffmpeg() -> bool:
@@ -644,15 +693,21 @@ class VideoProcessor:
         if not settings:
             settings = {}
         
-        # Use ASS subtitle for advanced styling
+        # Escape path properly for ffmpeg (handle spaces, special chars)
+        # Use single quotes for paths with spaces
+        subtitle_path_escaped = subtitle_path.replace("'", "'\\''")
+        subtitle_path_escaped = f"'{subtitle_path_escaped}'"
+        
+        # Use ASS subtitle for advanced styling (preferred)
         if subtitle_path.endswith('.ass'):
-            # For ASS files, use ass filter
-            return f"ass='{subtitle_path}'"
+            # For ASS files, use ass filter with proper escaping
+            return f"ass={subtitle_path_escaped}"
         
-        # For SRT files, use subtitles filter with styling
-        filter_parts = [f"subtitles='{subtitle_path}'"]
+        # For SRT files, convert to ASS first or use subtitles filter
+        # Use subtitles filter with styling options
+        filter_str = f"subtitles={subtitle_path_escaped}"
         
-        # Add styling options
+        # Add styling via force_style parameter
         style_options = []
         
         # Font settings - Use Arabic-compatible fonts
@@ -668,17 +723,28 @@ class VideoProcessor:
         style_options.append(f"FontName={font_name}")
         
         if settings.get('font_size'):
-            style_options.append(f"FontSize={settings['font_size']}")
+            style_options.append(f"FontSize={int(settings['font_size'])}")
         
-        # Colors (need to be in ASS format)
+        # Colors (need to be in ASS format: &HAABBGGRR)
         if settings.get('font_color'):
             color = settings['font_color'].replace('#', '')
-            style_options.append(f"PrimaryColour=&H00{color[-2:]}{color[2:4]}{color[:2]}")
+            if len(color) == 6:
+                # Convert RGB to BGR for ASS
+                r = color[0:2]
+                g = color[2:4]
+                b = color[4:6]
+                style_options.append(f"PrimaryColour=&H00{b}{g}{r}")
         
         if settings.get('bg_color'):
             bg_color = settings['bg_color'].replace('#', '')
-            opacity = settings.get('bg_opacity', 128)
-            style_options.append(f"BackColour=&H{hex(opacity)[2:]:0>2}{bg_color[-2:]}{bg_color[2:4]}{bg_color[:2]}")
+            opacity = int(settings.get('bg_opacity', 180))
+            if len(bg_color) == 6:
+                r = bg_color[0:2]
+                g = bg_color[2:4]
+                b = bg_color[4:6]
+                # Format: &HAABBGGRR where AA is opacity
+                opacity_hex = format(opacity, '02X')
+                style_options.append(f"BackColour=&H{opacity_hex}{b}{g}{r}")
         
         # Position
         alignment = {
@@ -689,16 +755,28 @@ class VideoProcessor:
         style_options.append(f"Alignment={alignment}")
         
         if style_options:
-            filter_parts.append(f"force_style='{','.join(style_options)}'")
+            style_str = ','.join(style_options)
+            filter_str = f"{filter_str}:force_style='{style_str}'"
         
-        return ':'.join(filter_parts)
+        return filter_str
     
     @staticmethod
-    def get_quality_settings(quality: str) -> List[str]:
+    def get_quality_settings(quality: str, use_filter: bool = False) -> List[str]:
         """الحصول على إعدادات الجودة لـ ffmpeg"""
         
-        if quality == 'original':
-            return ['-c:v', 'copy']  # No re-encoding
+        # If using filter (subtitle), we MUST re-encode, cannot use copy
+        if quality == 'original' and not use_filter:
+            return ['-c:v', 'copy']  # No re-encoding (only when no filter)
+        elif quality == 'original' and use_filter:
+            # When using filter, use high quality encoding to preserve original quality
+            return [
+                '-c:v', 'libx264',
+                '-preset', 'slow',
+                '-crf', '18',  # High quality (lower = better quality)
+                '-profile:v', 'high',
+                '-level', '4.1',
+                '-pix_fmt', 'yuv420p'
+            ]
         elif quality == 'high':
             return [
                 '-c:v', 'libx264',
@@ -728,7 +806,7 @@ class VideoProcessor:
                 '-vf', 'scale=w=min(iw\\,1280):h=-2'  # Max width 1280
             ]
         else:
-            return ['-c:v', 'libx264', '-crf', '23']
+            return ['-c:v', 'libx264', '-crf', '23', '-preset', 'medium']
 
 # Initialize downloader
 downloader = EnhancedDownloader()
@@ -916,11 +994,15 @@ def api_instant_translate():
             
             session['transcript'] = result['text']
             session['source_language'] = result.get('language', language)
+            # Store segments for accurate subtitle timing
+            if 'segments' in result:
+                session['whisper_segments'] = result['segments']
             
             return jsonify({
                 'success': True,
                 'text': result['text'],
-                'language': result.get('language', language)
+                'language': result.get('language', language),
+                'segments': result.get('segments', [])  # Return segments to frontend
             })
             
         elif step == 'translate':
@@ -949,6 +1031,19 @@ def api_instant_translate():
             video_file = data.get('video_file') or session.get('video_file')
             subtitle_text = data.get('subtitle_text') or session.get('translated_text')
             settings = data.get('settings', {})
+            quality = data.get('quality', 'original')  # Get quality from request
+            
+            # Handle relative paths
+            if video_file and not os.path.isabs(video_file):
+                possible_paths = [
+                    os.path.join(app.config['DOWNLOAD_FOLDER'], video_file),
+                    os.path.join(app.config['UPLOAD_FOLDER'], video_file),
+                    video_file
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        video_file = path
+                        break
             
             if not video_file or not os.path.exists(video_file):
                 return jsonify({'success': False, 'message': 'ملف الفيديو غير موجود'}), 400
@@ -956,23 +1051,106 @@ def api_instant_translate():
             if not subtitle_text:
                 return jsonify({'success': False, 'message': 'لا يوجد نص للترجمة'}), 400
             
-            # Create SRT file
-            srt_content = SubtitleProcessor.create_srt(subtitle_text)
+            # Get video duration for accurate subtitle timing
+            video_duration = VideoProcessor.get_video_duration(video_file)
+            
+            # Get Whisper segments if available (for accurate timing)
+            whisper_segments = session.get('whisper_segments', None)
+            original_text = session.get('transcript', '')
+            
+            # Create SRT file with accurate timing
+            if whisper_segments and len(whisper_segments) > 0 and original_text:
+                # Use Whisper segments for precise timing
+                # Map translated text to original segments
+                segments_for_srt = []
+                
+                # Split texts into words for mapping
+                original_words = original_text.split()
+                translated_words = subtitle_text.split()
+                
+                # Calculate ratio for word mapping
+                if len(original_words) > 0:
+                    word_ratio = len(translated_words) / len(original_words)
+                else:
+                    word_ratio = 1.0
+                
+                segment_index = 0
+                translated_word_index = 0
+                
+                for segment in whisper_segments:
+                    # Use original timing from Whisper
+                    start_time = segment.get('start', 0)
+                    end_time = segment.get('end', start_time + 3)
+                    
+                    # Get original segment text
+                    original_segment_text = segment.get('text', '')
+                    original_segment_words = original_segment_text.split()
+                    
+                    # Calculate how many translated words correspond to this segment
+                    if original_segment_words:
+                        translated_words_count = max(1, int(len(original_segment_words) * word_ratio))
+                    else:
+                        # Distribute remaining words evenly
+                        remaining_segments = len(whisper_segments) - segment_index
+                        remaining_words = len(translated_words) - translated_word_index
+                        translated_words_count = max(1, remaining_words // remaining_segments) if remaining_segments > 0 else remaining_words
+                    
+                    # Extract corresponding translated words
+                    end_word_index = min(translated_word_index + translated_words_count, len(translated_words))
+                    segment_translated_text = ' '.join(translated_words[translated_word_index:end_word_index])
+                    translated_word_index = end_word_index
+                    
+                    if segment_translated_text.strip():
+                        segments_for_srt.append({
+                            'start': start_time,
+                            'end': end_time,
+                            'text': segment_translated_text.strip()
+                        })
+                    
+                    segment_index += 1
+                
+                # If we have segments, use them
+                if segments_for_srt:
+                    srt_content = SubtitleProcessor.create_srt(
+                        subtitle_text, 
+                        duration=video_duration,
+                        segments=segments_for_srt
+                    )
+                else:
+                    # Fallback: create SRT with calculated timing
+                    srt_content = SubtitleProcessor.create_srt(
+                        subtitle_text,
+                        duration=video_duration
+                    )
+            else:
+                # Fallback: create SRT with calculated timing
+                srt_content = SubtitleProcessor.create_srt(
+                    subtitle_text,
+                    duration=video_duration
+                )
+            
             srt_filename = f"instant_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
             srt_path = os.path.join(app.config['SUBTITLE_FOLDER'], srt_filename)
             
             with open(srt_path, 'w', encoding='utf-8') as f:
                 f.write(srt_content)
             
-            # Create ASS file with styling
+            # Create ASS file with styling (use settings from request)
+            font_size = int(settings.get('font_size', 22))
+            font_color = settings.get('font_color', '#FFFFFF')
+            bg_color = settings.get('bg_color', '#000000')
+            bg_opacity = int(settings.get('bg_opacity', 180))
+            position = settings.get('position', 'bottom')
+            font_name = settings.get('font_name', 'Arial')
+            
             ass_content = SubtitleProcessor.create_ass_subtitle(
                 srt_content,
-                font_size=int(settings.get('font_size', 22)),
-                font_color=settings.get('font_color', '#FFFFFF').replace('#', ''),
-                bg_color='000000',
-                bg_opacity=180,
-                position=settings.get('position', 'bottom'),
-                font_name=settings.get('font_name', 'Arial')
+                font_size=font_size,
+                font_color=font_color.replace('#', ''),
+                bg_color=bg_color.replace('#', ''),
+                bg_opacity=bg_opacity,
+                position=position,
+                font_name=font_name
             )
             
             ass_path = srt_path.replace('.srt', '.ass')
@@ -983,13 +1161,23 @@ def api_instant_translate():
             output_filename = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
             output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
             
-            # Merge subtitle with video
+            # Prepare subtitle settings dict for merge
+            subtitle_settings = {
+                'font_name': font_name,
+                'font_size': font_size,
+                'font_color': font_color,
+                'bg_color': bg_color,
+                'bg_opacity': bg_opacity,
+                'position': position
+            }
+            
+            # Merge subtitle with video (use quality from request)
             result = VideoProcessor.merge_subtitles(
                 video_file,
                 ass_path,
                 output_path,
-                quality='medium',
-                subtitle_settings=settings
+                quality=quality,
+                subtitle_settings=subtitle_settings
             )
             
             if result['success']:

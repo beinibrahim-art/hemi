@@ -1087,6 +1087,33 @@
                                     </div>
                                 </div>
                                 
+                                <!-- Quality Selection -->
+                                <div class="mt-4">
+                                    <label class="form-label">جودة الفيديو النهائي:</label>
+                                    <div class="quality-cards">
+                                        <div class="quality-card selected" data-quality="original" onclick="selectInstantQuality('original')">
+                                            <div style="font-size: 2rem;">🎬</div>
+                                            <h5>الجودة الأصلية</h5>
+                                            <small>أفضل جودة - إعادة ترميز</small>
+                                        </div>
+                                        <div class="quality-card" data-quality="high" onclick="selectInstantQuality('high')">
+                                            <div style="font-size: 2rem;">🎥</div>
+                                            <h5>جودة عالية</h5>
+                                            <small>1080p+ H.264</small>
+                                        </div>
+                                        <div class="quality-card" data-quality="medium" onclick="selectInstantQuality('medium')">
+                                            <div style="font-size: 2rem;">📹</div>
+                                            <h5>جودة متوسطة</h5>
+                                            <small>720p - حجم أصغر</small>
+                                        </div>
+                                        <div class="quality-card" data-quality="low" onclick="selectInstantQuality('low')">
+                                            <div style="font-size: 2rem;">📱</div>
+                                            <h5>جودة منخفضة</h5>
+                                            <small>480p - حجم صغير</small>
+                                        </div>
+                                    </div>
+                                </div>
+                                
                                 <!-- Preview Section -->
                                 <div class="mt-4">
                                     <div class="d-flex justify-content-between align-items-center mb-3">
@@ -1848,6 +1875,7 @@
         // Instant translation subtitle settings functions
         let instantSelectedFont = 'Arial';
         let instantSelectedPosition = 'bottom';
+        let instantSelectedQuality = 'original';
 
         function selectInstantFont(font) {
             instantSelectedFont = font;
@@ -1869,6 +1897,16 @@
                 }
             });
             updateInstantPreview();
+        }
+
+        function selectInstantQuality(quality) {
+            instantSelectedQuality = quality;
+            document.querySelectorAll('#instantSubtitleSettings .quality-card').forEach(card => {
+                card.classList.remove('selected');
+                if (card.dataset.quality === quality) {
+                    card.classList.add('selected');
+                }
+            });
         }
 
         async function loadInstantVideoPreview(videoFile) {
@@ -2020,6 +2058,7 @@
                     video_file: videoFile,
                     subtitle_text: translatedText,
                     step: 'merge',
+                    quality: instantSelectedQuality,
                     settings: getInstantSubtitleSettings()
                 });
 
