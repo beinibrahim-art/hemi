@@ -182,6 +182,14 @@
             margin-top: 20px;
         }
 
+        .tab-pane {
+            display: none;
+        }
+
+        .tab-pane.active-tab {
+            display: block;
+        }
+
         .hidden {
             display: none !important;
         }
@@ -224,7 +232,7 @@
         <!-- Tab Content -->
         <div class="tab-content">
             <!-- Instant Translate Tab -->
-            <div id="instant-tab" class="tab-pane">
+            <div id="instant-tab" class="tab-pane active-tab">
                 <div class="card-custom">
                     <h3 class="mb-4"><i class="bi bi-lightning-charge"></i> الترجمة الفورية</h3>
                     
@@ -484,6 +492,7 @@
         function showTab(tabName) {
             // Hide all tabs
             document.querySelectorAll('.tab-pane').forEach(tab => {
+                tab.classList.remove('active-tab');
                 tab.classList.add('hidden');
             });
             
@@ -493,10 +502,16 @@
             });
             
             // Show selected tab
-            document.getElementById(tabName + '-tab').classList.remove('hidden');
+            const selectedTab = document.getElementById(tabName + '-tab');
+            if (selectedTab) {
+                selectedTab.classList.remove('hidden');
+                selectedTab.classList.add('active-tab');
+            }
             
             // Add active to clicked nav link
-            event.target.classList.add('active');
+            if (event && event.target) {
+                event.target.classList.add('active');
+            }
             
             currentTab = tabName;
         }
