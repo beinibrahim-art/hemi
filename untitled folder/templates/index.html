@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdn.jsdelivr.net https://cdn.tailwindcss.com; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.tailwindcss.com; img-src 'self' data: https:; font-src 'self' https://cdn.jsdelivr.net;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdn.jsdelivr.net https://cdn.tailwindcss.com blob:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.tailwindcss.com; img-src 'self' data: https: blob:; font-src 'self' https://cdn.jsdelivr.net; media-src 'self' blob: data: https:;">
     <title>التطبيق المتكامل للترجمة والتحميل v5.0</title>
     
     <!-- Tailwind CSS -->
@@ -673,6 +673,20 @@
                             <i class="bi bi-download"></i> ابدأ التحميل
                         </button>
                     </div>
+                    
+                    <!-- Download Result -->
+                    <div id="downloadResult" class="hidden mt-6 glass-strong rounded-xl p-6">
+                        <div class="text-center">
+                            <i class="bi bi-check-circle text-5xl text-green-400 mb-4"></i>
+                            <h4 class="text-xl font-bold mb-4">تم التحميل بنجاح!</h4>
+                            <a id="downloadFileLink" href="#" class="btn-primary-glass px-6 py-3 rounded-xl font-semibold inline-block">
+                                <i class="bi bi-download"></i> تحميل الملف
+                            </a>
+                            <button class="btn-glass px-6 py-3 rounded-xl font-semibold mt-3 mr-3" onclick="resetDownload()">
+                                <i class="bi bi-arrow-clockwise"></i> تحميل آخر
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -968,10 +982,45 @@
                 <div class="card-glass rounded-3xl p-8">
                     <h3 class="text-2xl font-bold mb-6"><i class="bi bi-translate"></i> ترجمة النص</h3>
                     
+                    <!-- Mode Selection -->
                     <div class="mb-6">
+                        <label class="block text-lg font-semibold mb-3">طريقة الترجمة:</label>
+                        <div class="flex gap-4 mb-4">
+                            <label class="flex items-center cursor-pointer">
+                                <input type="radio" name="translateMode" value="text" checked class="w-5 h-5 mr-2">
+                                <span>ترجمة نص</span>
+                            </label>
+                            <label class="flex items-center cursor-pointer">
+                                <input type="radio" name="translateMode" value="srt" class="w-5 h-5 mr-2">
+                                <span>ترجمة ملف SRT</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- Text Mode -->
+                    <div id="translateTextMode" class="mb-6">
                         <label class="block text-lg font-semibold mb-3">النص للترجمة:</label>
                         <textarea id="translateTextInput" class="input-glass w-full px-4 py-3 rounded-xl" rows="8" 
                                   placeholder="الصق النص هنا..."></textarea>
+                    </div>
+                    
+                    <!-- SRT File Mode -->
+                    <div id="translateSrtMode" class="hidden mb-6">
+                        <label class="block text-lg font-semibold mb-3">رفع ملف SRT:</label>
+                        <div id="translateSrtUploadArea" class="upload-area-glass rounded-xl p-12 text-center cursor-pointer">
+                            <i class="bi bi-cloud-upload text-5xl mb-4 text-gray-400"></i>
+                            <p class="text-gray-300">اسحب وأفلت ملف SRT هنا أو اضغط للاختيار</p>
+                            <input type="file" id="translateSrtFile" accept=".srt,.txt" class="hidden">
+                        </div>
+                        <div id="translateSrtFileInfo" class="hidden glass rounded-xl p-4 mt-3 flex justify-between items-center">
+                            <div>
+                                <span class="font-semibold" id="translateSrtFileName"></span>
+                                <span class="text-gray-400 text-sm mr-2" id="translateSrtFileSize"></span>
+                            </div>
+                            <button class="btn-glass px-4 py-2 rounded-lg text-red-400 hover:text-red-300" onclick="removeTranslateSrtFile()">
+                                <i class="bi bi-x-circle"></i> إزالة
+                            </button>
+                        </div>
                     </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -1277,6 +1326,7 @@
             const videoFile = document.getElementById('videoFile');
             const subtitleFile = document.getElementById('subtitleFile');
             const transcribeFile = document.getElementById('transcribeFile');
+            const translateSrtFile = document.getElementById('translateSrtFile');
             
             if (videoFile) {
                 videoFile.addEventListener('change', () => handleFileSelect('videoFile'));
@@ -1287,13 +1337,17 @@
             if (transcribeFile) {
                 transcribeFile.addEventListener('change', () => handleFileSelect('transcribeFile'));
             }
+            if (translateSrtFile) {
+                translateSrtFile.addEventListener('change', () => handleFileSelect('translateSrtFile'));
+            }
         }
 
         function setupDragDrop() {
             const uploadAreas = [
                 { area: 'videoUploadArea', input: 'videoFile' },
                 { area: 'subtitleUploadArea', input: 'subtitleFile' },
-                { area: 'transcribeUploadArea', input: 'transcribeFile' }
+                { area: 'transcribeUploadArea', input: 'transcribeFile' },
+                { area: 'translateSrtUploadArea', input: 'translateSrtFile' }
             ];
             
             uploadAreas.forEach(({ area, input }) => {
@@ -1325,6 +1379,23 @@
         }
 
         function setupFormControls() {
+            // Translate mode switching
+            const translateModeRadios = document.querySelectorAll('input[name="translateMode"]');
+            translateModeRadios.forEach(radio => {
+                radio.addEventListener('change', function() {
+                    const textMode = document.getElementById('translateTextMode');
+                    const srtMode = document.getElementById('translateSrtMode');
+                    
+                    if (this.value === 'srt') {
+                        if (textMode) textMode.classList.add('hidden');
+                        if (srtMode) srtMode.classList.remove('hidden');
+                    } else {
+                        if (textMode) textMode.classList.remove('hidden');
+                        if (srtMode) srtMode.classList.add('hidden');
+                    }
+                });
+            });
+            
             // Transcribe mode switching
             const modeRadios = document.querySelectorAll('input[name="transcribeMode"]');
             modeRadios.forEach(radio => {
@@ -1448,6 +1519,11 @@
                 document.getElementById('transcribeFileSize').textContent = formatFileSize(file.size);
                 document.getElementById('transcribeFileInfo').classList.remove('hidden');
                 document.getElementById('transcribeUploadArea').classList.add('hidden');
+            } else if (inputId === 'translateSrtFile') {
+                document.getElementById('translateSrtFileName').textContent = file.name;
+                document.getElementById('translateSrtFileSize').textContent = formatFileSize(file.size);
+                document.getElementById('translateSrtFileInfo').classList.remove('hidden');
+                document.getElementById('translateSrtUploadArea').classList.add('hidden');
             }
         }
 
@@ -1575,10 +1651,13 @@
                 }
 
                 window.tempTranscriptFile = transcribeResponse.data.temp_file;
+                window.transcriptSegments = transcribeResponse.data.segments || [];
                 updateInstantProgress(60, 'جاري الترجمة...');
 
+                // إرسال segments مع التوقيتات للترجمة الوقتية
                 const translateResponse = await axios.post('/api/instant-translate', {
                     text: transcribeResponse.data.text,
+                    segments: window.transcriptSegments, // إرسال segments مع التوقيتات
                     temp_transcript_file: window.tempTranscriptFile,
                     step: 'translate',
                     source_lang: transcribeResponse.data.language || 'auto',
@@ -1591,6 +1670,7 @@
 
                 window.tempTranslatedFile = translateResponse.data.temp_file;
                 window.instantTranslatedText = translateResponse.data.translated_text;
+                window.translatedSegments = translateResponse.data.translated_segments || [];
                 window.instantVideoFile = videoFile || downloadResponse.data.file;
                 
                 updateInstantProgress(70, 'جاري تحضير المعاينة...');
@@ -1837,7 +1917,7 @@
                 const fontSize = document.getElementById('instantFontSize')?.value || 20;
                 const fontColor = document.getElementById('instantFontColor')?.value || '#FFFFFF';
                 const bgColor = document.getElementById('instantBgColor')?.value || '#000000';
-                const bgOpacity = document.getElementById('instantBgOpacity')?.value || 128;
+                const bgOpacity = parseInt(document.getElementById('instantBgOpacity')?.value || 128);
                 const verticalOffset = parseInt(document.getElementById('instantVerticalOffset')?.value || 0);
                 
                 const response = await axios.post('/api/instant-translate', {
@@ -1848,12 +1928,12 @@
                     temp_audio_file: tempAudioFile,
                     temp_transcript_file: tempTranscriptFile,
                     temp_translated_file: tempTranslatedFile,
-                    font_size: fontSize,
-                    font_color: fontColor,
-                    bg_color: bgColor,
-                    bg_opacity: bgOpacity,
+                    fontSize: fontSize,
+                    fontColor: fontColor,
+                    bgColor: bgColor,
+                    bgOpacity: bgOpacity, // التأكد من أنه رقم
                     position: window.instantSelectedPosition || 'bottom',
-                    font_name: window.instantSelectedFont || 'Arial',
+                    fontFamily: window.instantSelectedFont || 'Arial',
                     quality: window.instantSelectedQuality || 'original',
                     vertical_offset: verticalOffset
                 });
@@ -2164,13 +2244,59 @@
                                 clearInterval(progressInterval);
                                 if (downloadStartBtn) {
                                     downloadStartBtn.innerHTML = '<i class="bi bi-check-circle"></i> تم التحميل!';
+                                    downloadStartBtn.disabled = false;
                                 }
                                 showAlert('تم التحميل بنجاح!', 'success');
                                 
-                                // البحث عن الملف المحمّل
-                                setTimeout(() => {
-                                    window.location.reload(); // إعادة تحميل الصفحة لعرض الملف الجديد
-                                }, 1000);
+                                // البحث عن الملف المحمّل وعرض رابط التحميل
+                                try {
+                                    // محاولة الحصول على معلومات الملف من API
+                                    const fileInfoResponse = await axios.get(`/api/media/progress/${downloadId}`);
+                                    if (fileInfoResponse.data.file) {
+                                        const filePath = fileInfoResponse.data.file;
+                                        let downloadPath = filePath.replace('downloads/', '').replace('downloads\\', '');
+                                        if (downloadPath.includes('/') || downloadPath.includes('\\')) {
+                                            downloadPath = downloadPath.split(/[/\\]/).pop();
+                                        }
+                                        
+                                        // عرض رابط التحميل
+                                        const downloadResult = document.getElementById('downloadResult');
+                                        const downloadFileLink = document.getElementById('downloadFileLink');
+                                        if (downloadResult && downloadFileLink) {
+                                            downloadFileLink.href = `/download/${encodeURIComponent(downloadPath)}`;
+                                            downloadResult.classList.remove('hidden');
+                                        } else {
+                                            // إذا لم يكن هناك قسم للنتيجة، تحميل مباشرة
+                                            window.location.href = `/download/${encodeURIComponent(downloadPath)}`;
+                                        }
+                                    } else {
+                                        // البحث في مجلد downloads عن أحدث ملف
+                                        setTimeout(async () => {
+                                            try {
+                                                const storageResponse = await axios.get('/api/storage-info');
+                                                if (storageResponse.data.success) {
+                                                    // عرض رابط للبحث في مجلد downloads
+                                                    const downloadResult = document.getElementById('downloadResult');
+                                                    const downloadFileLink = document.getElementById('downloadFileLink');
+                                                    if (downloadResult && downloadFileLink) {
+                                                        downloadFileLink.href = '/downloads';
+                                                        downloadFileLink.textContent = 'فتح مجلد التحميلات';
+                                                        downloadResult.classList.remove('hidden');
+                                                    }
+                                                }
+                                            } catch (e) {
+                                                console.error('Error getting storage info:', e);
+                                            }
+                                        }, 500);
+                                    }
+                                } catch (error) {
+                                    console.error('Error getting file info:', error);
+                                    // عرض رسالة نجاح فقط
+                                    const downloadResult = document.getElementById('downloadResult');
+                                    if (downloadResult) {
+                                        downloadResult.classList.remove('hidden');
+                                    }
+                                }
                             } else if (progress.status === 'error') {
                                 clearInterval(progressInterval);
                                 if (downloadStartBtn) {
@@ -2209,7 +2335,17 @@
                         if (downloadPath.includes('/') || downloadPath.includes('\\')) {
                             downloadPath = downloadPath.split(/[/\\]/).pop();
                         }
-                        window.location.href = `/download/${encodeURIComponent(downloadPath)}`;
+                        
+                        // عرض رابط التحميل بدلاً من إعادة تحميل الصفحة
+                        const downloadResult = document.getElementById('downloadResult');
+                        const downloadFileLink = document.getElementById('downloadFileLink');
+                        if (downloadResult && downloadFileLink) {
+                            downloadFileLink.href = `/download/${encodeURIComponent(downloadPath)}`;
+                            downloadResult.classList.remove('hidden');
+                        } else {
+                            // Fallback: تحميل مباشرة
+                            window.location.href = `/download/${encodeURIComponent(downloadPath)}`;
+                        }
                     } else {
                         showAlert(response.data.message || 'فشل التحميل', 'danger');
                         if (downloadStartBtn) {
@@ -2228,6 +2364,39 @@
             }
         };
 
+        // ========== DOWNLOAD RESET FUNCTION ==========
+        window.resetDownload = function() {
+            // إخفاء نتيجة التحميل
+            const downloadResult = document.getElementById('downloadResult');
+            if (downloadResult) {
+                downloadResult.classList.add('hidden');
+            }
+            
+            // إعادة تعيين زر التحميل
+            const downloadStartBtn = document.getElementById('downloadStartBtn');
+            if (downloadStartBtn) {
+                downloadStartBtn.disabled = false;
+                downloadStartBtn.innerHTML = '<i class="bi bi-download"></i> ابدأ التحميل';
+            }
+            
+            // إعادة تعيين الجودة المختارة
+            window.selectedQuality = null;
+            window.selectedQualityCommand = null;
+            
+            // إخفاء قسم الجودات
+            const qualitySection = document.getElementById('qualitySection');
+            if (qualitySection) {
+                qualitySection.classList.add('hidden');
+                qualitySection.classList.remove('quality-selected');
+            }
+            
+            // مسح رابط التحميل
+            const downloadFileLink = document.getElementById('downloadFileLink');
+            if (downloadFileLink) {
+                downloadFileLink.href = '#';
+            }
+        };
+        
         // ========== SUBTITLE EDITOR FUNCTIONS ==========
         window.removeVideo = function() {
             videoFileData = null;
@@ -2488,24 +2657,38 @@
                 
                 if (response.data.success) {
                     const resultDiv = document.getElementById('transcribeResult');
+                    const srtUrl = response.data.srt_url || (response.data.srt_file ? `/download/${response.data.srt_file}` : null);
+                    const hasSegments = response.data.segments && response.data.segments.length > 0;
+                    
                     resultDiv.innerHTML = `
                         <div class="glass-strong rounded-xl p-6">
                             <h4 class="text-green-400 font-bold mb-4"><i class="bi bi-check-circle-fill"></i> تم التحويل بنجاح!</h4>
                             <div class="mb-4">
                                 <label class="block text-sm font-semibold mb-2">النص المحول:</label>
-                                <textarea class="input-glass w-full px-4 py-3 rounded-xl" rows="10" readonly>${response.data.text}</textarea>
+                                <textarea class="input-glass w-full px-4 py-3 rounded-xl" rows="10" readonly>${response.data.text || ''}</textarea>
                             </div>
-                            <div class="flex gap-3">
-                                ${response.data.srt_file ? `<a href="/download/subtitle/${response.data.srt_file}" class="btn-primary-glass px-6 py-3 rounded-xl font-semibold">
+                            ${hasSegments ? `<div class="mb-4 text-sm text-gray-400">
+                                <i class="bi bi-info-circle"></i> تم اكتشاف ${response.data.segments.length} مقطع مع التوقيتات
+                            </div>` : ''}
+                            <div class="flex gap-3 flex-wrap">
+                                ${srtUrl ? `<a href="${srtUrl}" class="btn-primary-glass px-6 py-3 rounded-xl font-semibold" download>
                                     <i class="bi bi-download"></i> تحميل ملف SRT
                                 </a>` : ''}
-                                <button class="btn-glass px-6 py-3 rounded-xl font-semibold" onclick="copyText('${escapeText(response.data.text)}')">
+                                <button class="btn-glass px-6 py-3 rounded-xl font-semibold" onclick="copyText('${escapeText(response.data.text || '')}')">
                                     <i class="bi bi-clipboard"></i> نسخ النص
                                 </button>
+                                ${response.data.text ? `<button class="btn-glass px-6 py-3 rounded-xl font-semibold" onclick="translateTranscribedText('${escapeText(response.data.text)}')">
+                                    <i class="bi bi-translate"></i> ترجمة النص
+                                </button>` : ''}
                             </div>
                         </div>
                     `;
                     resultDiv.classList.remove('hidden');
+                    
+                    // حفظ segments للاستخدام لاحقاً
+                    if (response.data.segments) {
+                        window.transcribeSegments = response.data.segments;
+                    }
                 } else {
                     showAlert(response.data.message, 'danger');
                 }
@@ -2520,31 +2703,73 @@
 
         // ========== TRANSLATE FUNCTIONS ==========
         window.startTranslate = async function() {
-            const text = document.getElementById('translateTextInput').value.trim();
-            if (!text) {
-                showAlert('يرجى إدخال نص للترجمة', 'warning');
-                return;
-            }
-
+            const mode = document.querySelector('input[name="translateMode"]:checked')?.value || 'text';
+            const sourceLang = document.getElementById('sourceLanguage').value;
+            const targetLang = document.getElementById('targetLanguage').value;
+            
+            const startBtn = document.getElementById('translateStartBtn');
+            const resultDiv = document.getElementById('translateResult');
+            
             try {
-                const response = await axios.post('/api/translate', {
-                    text: text,
-                    source_lang: document.getElementById('sourceLanguage').value,
-                    target_lang: document.getElementById('targetLanguage').value
-                });
+                if (startBtn) startBtn.disabled = true;
+                
+                let response;
+                
+                if (mode === 'srt') {
+                    // ترجمة ملف SRT
+                    const srtFile = document.getElementById('translateSrtFile').files[0];
+                    if (!srtFile) {
+                        showAlert('يرجى اختيار ملف SRT', 'warning');
+                        if (startBtn) startBtn.disabled = false;
+                        return;
+                    }
+                    
+                    const formData = new FormData();
+                    formData.append('srt_file', srtFile);
+                    formData.append('source_lang', sourceLang);
+                    formData.append('target_lang', targetLang);
+                    
+                    response = await axios.post('/api/translate', formData, {
+                        headers: { 'Content-Type': 'multipart/form-data' }
+                    });
+                } else {
+                    // ترجمة نص عادي
+                    const text = document.getElementById('translateTextInput').value.trim();
+                    if (!text) {
+                        showAlert('يرجى إدخال نص للترجمة', 'warning');
+                        if (startBtn) startBtn.disabled = false;
+                        return;
+                    }
+                    
+                    response = await axios.post('/api/translate', {
+                        text: text,
+                        source_lang: sourceLang,
+                        target_lang: targetLang
+                    });
+                }
                 
                 if (response.data.success) {
-                    const resultDiv = document.getElementById('translateResult');
+                    const srtUrl = response.data.srt_url || (response.data.srt_file ? `/download/${response.data.srt_file}` : null);
+                    const hasSegments = response.data.translated_segments && response.data.translated_segments.length > 0;
+                    
                     resultDiv.innerHTML = `
                         <div class="glass-strong rounded-xl p-6">
                             <h4 class="text-green-400 font-bold mb-4"><i class="bi bi-check-circle-fill"></i> تمت الترجمة بنجاح!</h4>
                             <div class="mb-4">
-                                <label class="block text-sm font-semibold mb-2">النص المترجم:</label>
-                                <textarea class="input-glass w-full px-4 py-3 rounded-xl" rows="8" readonly>${response.data.translated_text}</textarea>
+                                <label class="block text-sm font-semibold mb-2">${mode === 'srt' ? 'ملخص الترجمة' : 'النص المترجم'}:</label>
+                                <textarea class="input-glass w-full px-4 py-3 rounded-xl" rows="8" readonly>${response.data.translated_text || ''}</textarea>
                             </div>
-                            <button class="btn-primary-glass px-6 py-3 rounded-xl font-semibold" onclick="copyText('${escapeText(response.data.translated_text)}')">
-                                <i class="bi bi-clipboard"></i> نسخ النص المترجم
-                            </button>
+                            ${hasSegments ? `<div class="mb-4 text-sm text-gray-400">
+                                <i class="bi bi-info-circle"></i> تم ترجمة ${response.data.translated_segments.length} مقطع مع الحفاظ على التوقيتات
+                            </div>` : ''}
+                            <div class="flex gap-3 flex-wrap">
+                                ${srtUrl ? `<a href="${srtUrl}" class="btn-primary-glass px-6 py-3 rounded-xl font-semibold" download>
+                                    <i class="bi bi-download"></i> تحميل ملف SRT المترجم
+                                </a>` : ''}
+                                <button class="btn-glass px-6 py-3 rounded-xl font-semibold" onclick="copyText('${escapeText(response.data.translated_text || '')}')">
+                                    <i class="bi bi-clipboard"></i> نسخ النص المترجم
+                                </button>
+                            </div>
                         </div>
                     `;
                     resultDiv.classList.remove('hidden');
@@ -2553,13 +2778,25 @@
                 }
             } catch (error) {
                 console.error('Error:', error);
-                showAlert('خطأ في الترجمة', 'danger');
+                showAlert(error.response?.data?.message || 'خطأ في الترجمة', 'danger');
+            } finally {
+                if (startBtn) startBtn.disabled = false;
             }
+        };
+        
+        window.removeTranslateSrtFile = function() {
+            const srtFile = document.getElementById('translateSrtFile');
+            const srtFileInfo = document.getElementById('translateSrtFileInfo');
+            const srtUploadArea = document.getElementById('translateSrtUploadArea');
+            
+            if (srtFile) srtFile.value = '';
+            if (srtFileInfo) srtFileInfo.classList.add('hidden');
+            if (srtUploadArea) srtUploadArea.classList.remove('hidden');
         };
 
         // ========== BATCH FUNCTIONS ==========
         window.startBatchDownload = async function() {
-            const urls = document.getElementById('batchUrls').value.trim().split('\n').filter(u => u);
+            const urls = document.getElementById('batchUrls').value.trim().split('\n').filter(u => u.trim());
             const quality = document.getElementById('batchQuality')?.value || '720p';
             
             if (urls.length === 0) {
@@ -2569,16 +2806,55 @@
 
             showAlert(`بدء تحميل ${urls.length} فيديو...`, 'info');
             
+            // تحديد format command
+            let formatCommand = quality;
+            if (quality === 'best') {
+                formatCommand = 'bestvideo+bestaudio/best';
+            } else if (quality === '720p' || quality === 'medium') {
+                formatCommand = 'bestvideo[height<=720]+bestaudio/best[height<=720]';
+            } else if (quality === '480p' || quality === 'low') {
+                formatCommand = 'bestvideo[height<=480]+bestaudio/best[height<=480]';
+            } else if (quality === '1080p') {
+                formatCommand = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]';
+            } else if (quality === '4k' || quality === '2160p') {
+                formatCommand = 'bestvideo[height<=2160]+bestaudio/best[height<=2160]';
+            }
+            
+            let successCount = 0;
+            let failCount = 0;
+            
             for (let i = 0; i < urls.length; i++) {
-                const url = urls[i];
+                const url = urls[i].trim();
+                if (!url) continue;
+                
                 try {
-                    await axios.post('/api/download', { url: url, quality: quality });
+                    const response = await axios.post('/api/media/download', {
+                        url: url,
+                        format: formatCommand,
+                        quality: quality,
+                        audio_only: false
+                    });
+                    
+                    if (response.data.success) {
+                        successCount++;
+                        console.log(`Started download ${i + 1}/${urls.length}: ${url}`);
+                    } else {
+                        failCount++;
+                        console.error(`Failed to start download ${i + 1}/${urls.length}: ${url}`);
+                    }
                 } catch (error) {
-                    console.error(`Error downloading ${url}:`, error);
+                    failCount++;
+                    console.error(`Error downloading ${i + 1}/${urls.length} (${url}):`, error);
+                }
+                
+                // تأخير صغير بين الطلبات لتجنب الحمل الزائد
+                if (i < urls.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 500));
                 }
             }
             
-            showAlert('اكتملت المعالجة الدفعية!', 'success');
+            showAlert(`اكتملت المعالجة الدفعية! نجح: ${successCount}, فشل: ${failCount}`, 
+                     failCount === 0 ? 'success' : 'warning');
         };
 
         // ========== HELPER FUNCTIONS ==========
@@ -2588,6 +2864,34 @@
             }).catch(() => {
                 showAlert('فشل نسخ النص', 'danger');
             });
+        };
+        
+        window.translateTranscribedText = async function(text) {
+            if (!text) {
+                showAlert('لا يوجد نص للترجمة', 'warning');
+                return;
+            }
+            
+            // الانتقال إلى تبويب الترجمة
+            const translateTab = document.getElementById('translate-tab');
+            const translateButton = document.querySelector('[data-tab="translate"]');
+            
+            if (translateButton) {
+                translateButton.click();
+            }
+            
+            // إدخال النص في حقل الترجمة
+            const translateInput = document.getElementById('translateTextInput');
+            if (translateInput) {
+                translateInput.value = text;
+            }
+            
+            // بدء الترجمة تلقائياً
+            setTimeout(() => {
+                if (typeof window.startTranslate === 'function') {
+                    window.startTranslate();
+                }
+            }, 500);
         };
 
         function escapeText(text) {
