@@ -647,29 +647,52 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
         
         events = []
-        lines = srt_content.strip().split('\n')
-        i = 0
+        # تقسيم الملف إلى مقاطع بناءً على الفراغات بين الأسطر
+        entries = re.split(r'\n\s*\n', srt_content.strip())
         
-        while i < len(lines):
-            if lines[i].strip().isdigit():
-                if i + 2 < len(lines):
-                    timing = lines[i + 1].strip()
-                    text = lines[i + 2].strip()
-                    
-                    if ' --> ' in timing:
-                        start, end = timing.split(' --> ')
-                        start_ass = start.replace(',', '.')
-                        end_ass = end.replace(',', '.')
-                        
-                        # استخدام string concatenation لتجنب مشاكل f-string
-                        dialogue_line = "Dialogue: 0," + start_ass + "," + end_ass + ",Default,,0,0,0,," + text
-                        events.append(dialogue_line)
-                    
-                    i += 4
-                else:
-                    i += 1
-            else:
-                i += 1
+        for entry in entries:
+            lines = entry.splitlines()
+            if len(lines) < 2:
+                continue
+            
+            index_line = lines[0].lstrip('\ufeff').strip()
+            timing_line = lines[1].strip()
+            
+            if not index_line.isdigit() or '-->' not in timing_line:
+                continue
+            
+            try:
+                start_raw, end_raw = [t.strip() for t in timing_line.split('-->')]
+            except ValueError:
+                continue
+            
+            start_ass = start_raw.replace(',', '.')
+            end_ass = end_raw.replace(',', '.')
+            
+            text_lines = lines[2:] if len(lines) > 2 else []
+            if not text_lines:
+                continue
+            
+            processed_lines = []
+            for raw_line in text_lines:
+                sanitized = raw_line.replace('\ufeff', '')
+                # تحويل أسطر متعددة داخل الترجمة إلى \N
+                sanitized = sanitized.replace('\r', '')
+                # الهروب من المحارف الخاصة في تنسيق ASS
+                sanitized = sanitized.replace('\\', r'\\')
+                sanitized = sanitized.replace('{', r'\{').replace('}', r'\}')
+                sanitized = sanitized.replace(',', r'\,')
+                processed_lines.append(sanitized)
+            
+            dialogue_text = r'\N'.join(processed_lines).strip()
+            if not dialogue_text:
+                continue
+            
+            dialogue_line = (
+                "Dialogue: 0," + start_ass + "," + end_ass +
+                ",Default,,0,0,0,," + dialogue_text
+            )
+            events.append(dialogue_line)
         
         return ass_header + '\n'.join(events)
 
@@ -713,17 +736,28 @@ class VideoProcessor:
             return False
     
     @staticmethod
-    def merge_subtitles(video_path: str, subtitle_path: str, 
-                       output_path: str, settings: Dict) -> bool:
+    def _build_filter_expression(filter_name: str, subtitle_file: Path) -> str:
+        """
+        إنشاء تعبير ffmpeg للـ filter مع التعامل مع المسارات التي تحتوي على فراغات أو رموز خاصة.
+        يتم استخدام علامات الاقتباس الأحادية لأن ffmpeg يتعامل معها داخلياً بدون تدخل shell.
+        """
+        path_str = subtitle_file.as_posix()
+        # الهروب من المحارف التي قد تكسر بناء الجملة داخل filter expression
+        path_str = path_str.replace('\\', r'\\').replace("'", r"\'")
+        return f"{filter_name}='{path_str}'"
+    
+    @staticmethod
+    def _merge_subtitles_legacy(video_path: str, subtitle_path: str, 
+                                output_path: str, settings: Dict) -> bool:
         """دمج الترجمة مع الفيديو - مع تحويل إجباري إلى H.264"""
         try:
             # التأكد من أن المسارات مطلقة
-            video_path = str(Path(video_path).resolve())
-            subtitle_path = str(Path(subtitle_path).resolve())
-            output_path = str(Path(output_path).resolve())
+            video_path = Path(video_path).resolve()
+            subtitle_path = Path(subtitle_path).resolve()
+            output_path = Path(output_path).resolve()
             
             # تحويل الفيديو إلى H.264 قبل الدمج إذا لم يكن كذلك
-            video_file = Path(video_path)
+            video_file = video_path
             if video_file.exists():
                 try:
                     # التحقق من codec
@@ -758,7 +792,7 @@ class VideoProcessor:
                         logger.info(f"Converting video: {' '.join(convert_cmd)}")
                         convert_result = subprocess.run(convert_cmd, capture_output=True, timeout=300, text=True)
                         if convert_result.returncode == 0 and temp_h264.exists():
-                            video_path = str(temp_h264)
+                            video_path = temp_h264.resolve()
                             logger.info(f"Source video converted to H.264: {temp_h264}")
                         else:
                             logger.warning(f"Video conversion failed or incomplete: {convert_result.stderr}")
@@ -983,6 +1017,195 @@ class VideoProcessor:
                 logger.error(f"Output directory is writable: {os.access(str(output_dir), os.W_OK)}")
                 return False
             
+        except Exception as e:
+            logger.error(f"Subtitle merge failed: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+    @staticmethod
+    def merge_subtitles(video_path: str, subtitle_path: str,
+                       output_path: str, settings: Dict) -> bool:
+        """نسخة محسّنة من دمج الترجمة لتفادي مشاكل المسارات والرموز الخاصة"""
+        try:
+            video_path = Path(video_path).resolve()
+            subtitle_path = Path(subtitle_path).resolve()
+            output_path = Path(output_path).resolve()
+
+            logger.info(
+                f"Preparing to merge subtitles. Video: {video_path}, Subtitle: {subtitle_path}, Output: {output_path}"
+            )
+
+            if not video_path.exists():
+                logger.error(f"Video file does not exist: {video_path}")
+                return False
+
+            if not subtitle_path.exists():
+                logger.error(f"Subtitle file does not exist: {subtitle_path}")
+                return False
+
+            video_input = video_path
+
+            if video_input.exists():
+                try:
+                    probe_cmd = [
+                        'ffprobe',
+                        '-v', 'error',
+                        '-select_streams', 'v:0',
+                        '-show_entries', 'stream=codec_name',
+                        '-of', 'default=noprint_wrappers=1:nokey=1',
+                        str(video_input)
+                    ]
+                    probe_result = subprocess.run(
+                        probe_cmd,
+                        capture_output=True,
+                        timeout=10,
+                        text=True
+                    )
+                    codec = probe_result.stdout.strip().lower()
+
+                    if codec and codec != 'h264':
+                        logger.info(f"Converting source video to H.264 before merge: {codec} -> h264")
+                        temp_h264 = video_input.parent / (
+                            f"{video_input.stem}_temp_h264_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+                        )
+                        convert_cmd = [
+                            'ffmpeg',
+                            '-i', str(video_input),
+                            '-c:v', 'libx264',
+                            '-profile:v', 'high',
+                            '-level', '4.0',
+                            '-pix_fmt', 'yuv420p',
+                            '-c:a', 'aac',
+                            '-b:a', '128k',
+                            '-movflags', '+faststart',
+                            '-y',
+                            str(temp_h264)
+                        ]
+                        logger.info(f"Converting video: {' '.join(convert_cmd)}")
+                        convert_result = subprocess.run(
+                            convert_cmd,
+                            capture_output=True,
+                            timeout=300,
+                            text=True
+                        )
+                        if convert_result.returncode == 0 and temp_h264.exists():
+                            video_input = temp_h264.resolve()
+                            logger.info(f"Source video converted to H.264: {video_input}")
+                        else:
+                            logger.warning(
+                                f"Video conversion failed or incomplete: {convert_result.stderr}"
+                            )
+                    else:
+                        logger.info(f"Video already H.264: {codec or 'unknown'}")
+                except Exception as e:
+                    logger.warning(
+                        f"Could not check/convert source video codec: {e}, proceeding with original video"
+                    )
+
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            is_srt = subtitle_path.suffix.lower() == '.srt'
+
+            def execute_filter(filter_expr: str, subtitle_file: Path, include_charenc: bool) -> Tuple[bool, subprocess.CompletedProcess]:
+                cmd = [
+                    'ffmpeg',
+                    '-i', str(video_input),
+                    '-vf', filter_expr,
+                    '-c:v', 'libx264',
+                    '-preset', 'medium',
+                    '-crf', '23',
+                    '-profile:v', 'high',
+                    '-level', '4.0',
+                    '-pix_fmt', 'yuv420p',
+                    '-c:a', 'aac',
+                    '-b:a', '128k',
+                    '-movflags', '+faststart',
+                    '-threads', '0'
+                ]
+
+                if include_charenc:
+                    cmd.extend(['-sub_charenc', 'UTF-8'])
+
+                cmd.extend(['-f', 'mp4', '-y', str(output_path)])
+
+                full_cmd = ' '.join(cmd)
+                logger.info(f"Running ffmpeg command: {full_cmd}")
+                logger.info(f"Video file exists: {video_input.exists()}, Subtitle file exists: {subtitle_file.exists()}")
+                logger.info(f"Output path: {output_path}")
+                logger.info(f"Video filter: {filter_expr}")
+
+                process = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    timeout=600,
+                    text=True
+                )
+
+                if process.returncode != 0:
+                    logger.error(f"FFmpeg failed with return code: {process.returncode}")
+                    logger.error(f"Full command: {full_cmd}")
+                    if process.stderr:
+                        logger.error(f"STDERR (first 2000 chars): {process.stderr[:2000]}")
+                    if process.stdout:
+                        logger.error(f"STDOUT (first 2000 chars): {process.stdout[:2000]}")
+
+                return process.returncode == 0, process
+
+            primary_filter = VideoProcessor._build_filter_expression(
+                'subtitles' if is_srt else 'ass',
+                subtitle_path
+            )
+            success, _ = execute_filter(primary_filter, subtitle_path, is_srt)
+
+            if success and output_path.exists():
+                file_size = output_path.stat().st_size
+                if file_size > 0:
+                    logger.info(f"Successfully merged subtitles. Output size: {file_size} bytes")
+                    return True
+                else:
+                    logger.error(f"Output file exists but is empty (0 bytes): {output_path}")
+                    success = False
+            elif success:
+                logger.error(f"FFmpeg reported success but output file not found: {output_path}")
+                success = False
+
+            if not success and is_srt:
+                logger.info("Trying with ASS filter as fallback...")
+                try:
+                    srt_content = subtitle_path.read_text(encoding='utf-8', errors='ignore')
+                except Exception as read_err:
+                    logger.error(f"Failed to read SRT file for fallback: {read_err}")
+                    return False
+
+                ass_content = SubtitleProcessor.create_ass(srt_content, settings)
+                ass_path = subtitle_path.with_suffix('.ass')
+
+                try:
+                    ass_path.write_text(ass_content, encoding='utf-8-sig')
+                except Exception as write_err:
+                    logger.error(f"Failed to write ASS file: {write_err}")
+                    return False
+
+                fallback_filter = VideoProcessor._build_filter_expression('ass', ass_path)
+                success_alt, _ = execute_filter(fallback_filter, ass_path, include_charenc=False)
+
+                if success_alt and output_path.exists():
+                    file_size = output_path.stat().st_size
+                    if file_size > 0:
+                        logger.info(f"Successfully merged with ASS filter. Output size: {file_size} bytes")
+                        return True
+                    else:
+                        logger.error(f"ASS filter succeeded but output file empty: {output_path}")
+                        return False
+                else:
+                    logger.error("ASS filter fallback failed")
+                    return False
+
+            if not success:
+                logger.error("Subtitle merge failed and no fallback succeeded.")
+                return False
+
+            return False
+
         except Exception as e:
             logger.error(f"Subtitle merge failed: {e}")
             logger.error(traceback.format_exc())
