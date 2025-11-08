@@ -529,6 +529,87 @@ class SubtitleProcessor:
     """معالج الترجمة"""
     
     @staticmethod
+    def split_long_segments(segments: List[Dict], max_duration: float = 5.0, max_chars: int = 80) -> List[Dict]:
+        """
+        تقسيم segments الطويلة إلى أجزاء أصغر
+        
+        Args:
+            segments: قائمة segments
+            max_duration: الحد الأقصى لمدة كل segment بالثواني
+            max_chars: الحد الأقصى لعدد الأحرف في كل segment
+        
+        Returns:
+            قائمة segments مقسمة
+        """
+        split_segments = []
+        
+        for segment in segments:
+            start_time = float(segment.get('start', 0))
+            end_time = float(segment.get('end', start_time + 3))
+            text = segment.get('text', '').strip()
+            
+            if not text:
+                continue
+            
+            duration = end_time - start_time
+            
+            # إذا كان segment قصيراً وعدد الأحرف معقول، استخدمه كما هو
+            if duration <= max_duration and len(text) <= max_chars:
+                split_segments.append({
+                    'start': start_time,
+                    'end': end_time,
+                    'text': text
+                })
+                continue
+            
+            # تقسيم النص بناءً على علامات التوقف
+            # نقسم على النقاط، علامات الاستفهام، علامات التعجب، والفاصلات
+            import re
+            # تقسيم على علامات التوقف مع الاحتفاظ بها
+            sentences = re.split(r'([.!?،؛]\s*)', text)
+            
+            # تجميع الجمل مع علامات التوقف
+            current_sentence = ""
+            current_start = start_time
+            sentence_duration = duration / len(text) if len(text) > 0 else duration
+            
+            for i, part in enumerate(sentences):
+                if not part.strip():
+                    continue
+                
+                current_sentence += part
+                
+                # إذا انتهت الجملة بعلامة توقف أو وصلنا للحد الأقصى
+                if part.strip().endswith(('.', '!', '?', '،', '؛')) or len(current_sentence) >= max_chars:
+                    if current_sentence.strip():
+                        # حساب الوقت بناءً على عدد الأحرف
+                        chars_ratio = len(current_sentence) / len(text) if len(text) > 0 else 1.0
+                        current_end = start_time + (duration * chars_ratio)
+                        
+                        # التأكد من أن المدة لا تتجاوز الحد الأقصى
+                        if current_end - current_start > max_duration:
+                            current_end = current_start + max_duration
+                        
+                        split_segments.append({
+                            'start': current_start,
+                            'end': current_end,
+                            'text': current_sentence.strip()
+                        })
+                        
+                        current_start = current_end
+                        current_sentence = ""
+            
+            # إضافة أي نص متبقي
+            if current_sentence.strip():
+                split_segments.append({
+                    'start': current_start,
+                    'end': end_time,
+                    'text': current_sentence.strip()
+                })
+        
+        return split_segments
+    
+    @staticmethod
     def create_srt(text: str, duration: float = None, segments: List[Dict] = None) -> str:
         """إنشاء ملف SRT"""
         srt_content = []
@@ -1215,6 +1296,11 @@ def api_instant_translate():
             
             # استخدام segments المترجمة فقط - لا نستخدم subtitle_text
             if whisper_segments and len(whisper_segments) > 0:
+                # تقسيم segments الطويلة إلى أجزاء أصغر
+                logger.info(f"Original segments count: {len(whisper_segments)}")
+                whisper_segments = SubtitleProcessor.split_long_segments(whisper_segments, max_duration=5.0, max_chars=80)
+                logger.info(f"After splitting segments count: {len(whisper_segments)}")
+                
                 segments_for_srt = []
                 translator = GoogleTranslator(source=source_language, target='ar')
                 
@@ -1227,6 +1313,64 @@ def api_instant_translate():
                     
                     if not original_segment_text:
                         continue
+                    
+                    # التأكد من أن المدة معقولة
+                    if end_time - start_time > 7.0:
+                        # تقسيم إضافي إذا كانت المدة طويلة جداً
+                        words = original_segment_text.split()
+                        words_per_second = len(words) / (end_time - start_time) if (end_time - start_time) > 0 else 2
+                        target_words = int(words_per_second * 5)  # 5 ثواني كحد أقصى
+                        
+                        if len(words) > target_words:
+                            # تقسيم إلى جمل أصغر
+                            sub_segments = []
+                            current_words = []
+                            current_start = start_time
+                            word_duration = (end_time - start_time) / len(words) if len(words) > 0 else 0.5
+                            
+                            for j, word in enumerate(words):
+                                current_words.append(word)
+                                
+                                # إذا وصلنا للحد الأقصى أو انتهت الجملة
+                                if len(current_words) >= target_words or word.endswith(('.', '!', '?', '،', '؛')):
+                                    sub_text = ' '.join(current_words)
+                                    sub_end = current_start + (len(current_words) * word_duration)
+                                    
+                                    sub_segments.append({
+                                        'start': current_start,
+                                        'end': sub_end,
+                                        'text': sub_text
+                                    })
+                                    
+                                    current_start = sub_end
+                                    current_words = []
+                            
+                            # إضافة أي كلمات متبقية
+                            if current_words:
+                                sub_text = ' '.join(current_words)
+                                sub_segments.append({
+                                    'start': current_start,
+                                    'end': end_time,
+                                    'text': sub_text
+                                })
+                            
+                            # ترجمة sub_segments
+                            for sub_seg in sub_segments:
+                                try:
+                                    translated_text = translator.translate(sub_seg['text'])
+                                    segments_for_srt.append({
+                                        'start': sub_seg['start'],
+                                        'end': sub_seg['end'],
+                                        'text': translated_text.strip()
+                                    })
+                                except Exception as e:
+                                    logger.warning(f"Translation failed: {e}")
+                                    segments_for_srt.append({
+                                        'start': sub_seg['start'],
+                                        'end': sub_seg['end'],
+                                        'text': sub_seg['text']
+                                    })
+                            continue
                     
                     try:
                         translated_segment_text = translator.translate(original_segment_text)
