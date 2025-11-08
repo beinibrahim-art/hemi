@@ -1,0 +1,2188 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>التطبيق المتكامل المحسن - v4.0</title>
+    
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <!-- Animate.css -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css">
+    
+    <style>
+        :root {
+            --primary-color: #6366f1;
+            --secondary-color: #8b5cf6;
+            --success-color: #10b981;
+            --danger-color: #ef4444;
+            --warning-color: #f59e0b;
+            --dark-bg: #0f0f0f;
+            --card-bg: #1a1a1a;
+            --text-light: #f3f4f6;
+            --primary-gradient: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
+            --secondary-gradient: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+            --border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+            background: #0a0a0a;
+            min-height: 100vh;
+            color: #e5e5e5;
+            direction: rtl;
+        }
+
+        .main-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(180deg, #0a0a0a 0%, #1a1a1a 100%);
+            min-height: 100vh;
+        }
+
+        .header {
+            text-align: center;
+            padding: 30px 0;
+            background: rgba(26, 26, 26, 0.8);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            margin-bottom: 30px;
+            animation: fadeInDown 1s;
+            border: 1px solid var(--border-color);
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+            background: linear-gradient(45deg, #f59e0b, #ef4444);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header .version {
+            color: #fbbf24;
+            font-size: 1.2rem;
+        }
+
+        .nav-tabs {
+            background: rgba(26, 26, 26, 0.9);
+            backdrop-filter: blur(5px);
+            border-radius: 15px;
+            padding: 10px;
+            margin-bottom: 30px;
+            border: 1px solid var(--border-color);
+            flex-wrap: wrap;
+        }
+
+        .nav-tabs .nav-link {
+            color: #e5e5e5;
+            border: none;
+            border-radius: 10px;
+            padding: 12px 24px;
+            margin: 5px;
+            transition: all 0.3s;
+            font-weight: 500;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .nav-tabs .nav-link:hover {
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateY(-2px);
+            color: #fff;
+        }
+
+        .nav-tabs .nav-link.active {
+            background: var(--primary-gradient);
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(245, 158, 11, 0.4);
+        }
+
+        .card-custom {
+            background: rgba(26, 26, 26, 0.9);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            border: 1px solid var(--border-color);
+            margin-bottom: 25px;
+            animation: fadeInUp 0.8s;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .card-custom:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(245, 158, 11, 0.2);
+        }
+
+        .section-divider {
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--primary-color), transparent);
+            margin: 40px 0;
+            animation: pulse 2s infinite;
+        }
+
+        .form-control, .form-select {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #e5e5e5;
+            border-radius: 10px;
+            padding: 12px;
+            transition: all 0.3s;
+        }
+
+        .form-control:focus, .form-select:focus {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 0.2rem rgba(245, 158, 11, 0.25);
+            color: #fff;
+        }
+
+        .form-control::placeholder {
+            color: rgba(255, 255, 255, 0.4);
+        }
+
+        .form-label {
+            color: #e5e5e5;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        option {
+            background: #1a1a1a;
+            color: #e5e5e5;
+        }
+
+        .btn-custom {
+            background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            padding: 12px 30px;
+            font-weight: 600;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-custom:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(99, 102, 241, 0.3);
+            color: #fff;
+        }
+
+        .btn-gradient {
+            background: var(--primary-gradient);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            padding: 12px 30px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .btn-gradient:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(245, 158, 11, 0.3);
+            color: #fff;
+        }
+
+        .quality-selector {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        .quality-option {
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid transparent;
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .quality-option:hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: var(--primary-color);
+        }
+
+        .quality-option.selected {
+            background: var(--primary-color);
+            border-color: var(--primary-color);
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+        }
+
+        .progress {
+            height: 25px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+
+        /* Subtitle Editor Styles */
+        .upload-area {
+            border: 2px dashed rgba(255, 255, 255, 0.3);
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            transition: all 0.3s;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .upload-area:hover {
+            border-color: #f59e0b;
+            background: rgba(245, 158, 11, 0.05);
+        }
+
+        .upload-area.dragover {
+            border-color: #10b981;
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        .upload-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+            color: #f59e0b;
+        }
+
+        .preview-section {
+            background: #000;
+            border-radius: 15px;
+            padding: 20px;
+            min-height: 400px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .video-preview {
+            width: 100%;
+            height: 400px;
+            background: #000;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .subtitle-preview {
+            position: absolute;
+            bottom: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-size: 20px;
+            text-align: center;
+            max-width: 80%;
+            transition: all 0.3s;
+        }
+
+        .color-picker-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .color-preview {
+            width: 50px;
+            height: 50px;
+            border-radius: 10px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .color-preview:hover {
+            transform: scale(1.1);
+            border-color: #f59e0b;
+        }
+
+        .slider-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .slider-value {
+            min-width: 60px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+
+        .custom-range {
+            appearance: none;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            height: 10px;
+            outline: none;
+        }
+
+        .custom-range::-webkit-slider-thumb {
+            appearance: none;
+            width: 25px;
+            height: 25px;
+            background: var(--primary-gradient);
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .custom-range::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+            box-shadow: 0 0 15px rgba(245, 158, 11, 0.5);
+        }
+
+        .position-selector {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        .position-option {
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid transparent;
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .position-option:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(245, 158, 11, 0.5);
+        }
+
+        .position-option.selected {
+            background: rgba(245, 158, 11, 0.2);
+            border-color: #f59e0b;
+        }
+
+        .quality-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .quality-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid transparent;
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .quality-card:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: #f59e0b;
+            transform: translateY(-5px);
+        }
+
+        .quality-card.selected {
+            background: rgba(245, 158, 11, 0.2);
+            border-color: #f59e0b;
+            box-shadow: 0 5px 20px rgba(245, 158, 11, 0.3);
+        }
+
+        .font-selector {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        .font-option {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 10px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .font-option:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: #f59e0b;
+        }
+
+        .font-option.selected {
+            background: rgba(245, 158, 11, 0.2);
+            border-color: #f59e0b;
+        }
+
+        .file-info {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .result-container {
+            display: none;
+            margin-top: 30px;
+        }
+
+        .result-card {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 15px;
+        }
+
+        .platform-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 20px 0;
+            justify-content: center;
+        }
+
+        .platform-badge {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.3s;
+        }
+
+        .platform-badge:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: scale(1.05);
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.8rem;
+            }
+            
+            .nav-tabs .nav-link {
+                padding: 10px 15px;
+                font-size: 0.9rem;
+            }
+            
+            .card-custom {
+                padding: 20px;
+            }
+            
+            .quality-cards {
+                grid-template-columns: 1fr;
+            }
+            
+            .position-selector {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Dark scrollbar */
+        ::-webkit-scrollbar {
+            width: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 5px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.5);
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 30px;
+            height: 30px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .progress-container {
+            display: none;
+            margin: 20px 0;
+        }
+
+        .alert-custom {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        /* Instant Translation Styles */
+        .step-indicator {
+            padding: 15px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s;
+        }
+
+        .step-indicator i {
+            font-size: 2rem;
+            margin-bottom: 10px;
+            display: block;
+        }
+
+        .step-indicator.active {
+            background: rgba(245, 158, 11, 0.2);
+            border-color: #f59e0b;
+            animation: pulse 1s infinite;
+        }
+
+        .step-indicator.completed {
+            background: rgba(16, 185, 129, 0.2);
+            border-color: #10b981;
+        }
+
+        .step-indicator.completed i {
+            color: #10b981;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 10px rgba(245, 158, 11, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+            }
+        }
+
+        .pulse-animation {
+            animation: pulse 2s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        <!-- Header -->
+        <div class="header animate__animated animate__fadeInDown">
+            <h1>🎬 التطبيق المتكامل المحسن</h1>
+            <div class="version">الإصدار 4.0 - جميع الأدوات في مكان واحد</div>
+            
+            <!-- Platform Badges -->
+            <div class="platform-badges">
+                <span class="platform-badge"><i class="bi bi-youtube"></i> YouTube</span>
+                <span class="platform-badge"><i class="bi bi-tiktok"></i> TikTok</span>
+                <span class="platform-badge"><i class="bi bi-instagram"></i> Instagram</span>
+                <span class="platform-badge"><i class="bi bi-twitter"></i> Twitter</span>
+                <span class="platform-badge"><i class="bi bi-facebook"></i> Facebook</span>
+                <span class="platform-badge"><i class="bi bi-play-circle"></i> +100 موقع</span>
+            </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <ul class="nav nav-tabs justify-content-center" id="mainTabs" role="tablist">
+            <li class="nav-item">
+                <button class="nav-link active" id="instant-tab" data-bs-toggle="tab" data-bs-target="#instant" type="button">
+                    <i class="bi bi-lightning-fill"></i> ترجمة فورية
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" id="download-tab" data-bs-toggle="tab" data-bs-target="#download" type="button">
+                    <i class="bi bi-download"></i> التحميل
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" id="subtitle-tab" data-bs-toggle="tab" data-bs-target="#subtitle" type="button">
+                    <i class="bi bi-badge-cc"></i> محرر الترجمة
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" id="transcribe-tab" data-bs-toggle="tab" data-bs-target="#transcribe" type="button">
+                    <i class="bi bi-mic"></i> تحويل لنص
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" id="translate-tab" data-bs-toggle="tab" data-bs-target="#translate" type="button">
+                    <i class="bi bi-translate"></i> الترجمة
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" id="batch-tab" data-bs-toggle="tab" data-bs-target="#batch" type="button">
+                    <i class="bi bi-stack"></i> معالجة دفعية
+                </button>
+            </li>
+        </ul>
+
+        <!-- Tab Contents -->
+        <div class="tab-content" id="mainTabContent">
+            
+            <!-- Instant Translation Tab -->
+            <div class="tab-pane fade show active" id="instant" role="tabpanel">
+                <div class="card-custom">
+                    <div class="text-center mb-4" style="padding: 30px; background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(239, 68, 68, 0.1)); border-radius: 20px;">
+                        <h2 style="background: linear-gradient(135deg, #f59e0b, #ef4444); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+                            <i class="bi bi-magic"></i> الترجمة الذكية بضغطة واحدة
+                        </h2>
+                        <p class="lead mt-3">حمّل الفيديو ← استخرج الصوت ← حوّل لنص ← ترجم للعربية ← ادمج مع الفيديو</p>
+                        <p style="color: #fbbf24;">كل هذا تلقائياً بضغطة زر واحدة! 🚀</p>
+                        <p class="mt-3" style="color: rgba(255,255,255,0.7);">فقط الصق الرابط واضغط الزر - سنقوم بتحميل الفيديو، استخراج الصوت، تحويله لنص، ترجمته للعربية، ودمجه مع الفيديو تلقائياً!</p>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-lg-8 mx-auto">
+                            <!-- Step 1: URL Input -->
+                            <div class="mb-4">
+                                <label class="form-label"><i class="bi bi-link-45deg"></i> رابط الفيديو:</label>
+                                <div class="input-group">
+                                    <input type="text" class="form-control form-control-lg" id="instantUrl" 
+                                           placeholder="الصق رابط من YouTube, TikTok, Instagram, Twitter, Facebook..."
+                                           style="font-size: 1.1rem;">
+                                </div>
+                            </div>
+
+                            <!-- Quick Settings -->
+                            <div class="row mb-4">
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label">جودة الفيديو:</label>
+                                    <select class="form-select" id="instantVideoQuality">
+                                        <option value="best">أفضل جودة</option>
+                                        <option value="720p" selected>720p (متوازن)</option>
+                                        <option value="480p">480p (سريع)</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label">نموذج Whisper:</label>
+                                    <select class="form-select" id="instantWhisperModel">
+                                        <option value="tiny">Tiny (سريع جداً)</option>
+                                        <option value="base" selected>Base (متوازن)</option>
+                                        <option value="small">Small (دقة أفضل)</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label">لغة المصدر:</label>
+                                    <select class="form-select" id="instantSourceLang">
+                                        <option value="auto" selected>كشف تلقائي</option>
+                                        <option value="en">English</option>
+                                        <option value="es">Español</option>
+                                        <option value="fr">Français</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Start Button -->
+                            <div class="text-center mb-4">
+                                <button class="btn btn-gradient btn-lg" onclick="startInstantTranslation()" 
+                                        id="instantStartBtn" style="min-width: 300px; font-size: 1.2rem; padding: 15px 30px;">
+                                    <i class="bi bi-magic"></i> ابدأ الترجمة الفورية
+                                </button>
+                            </div>
+
+                            <!-- Progress Steps -->
+                            <div id="instantProgress" style="display: none;">
+                                <div class="progress mb-3" style="height: 30px;">
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                         id="instantProgressBar" role="progressbar" style="width: 0%">0%</div>
+                                </div>
+                                
+                                <!-- Steps Status -->
+                                <div class="row text-center mb-4">
+                                    <div class="col">
+                                        <div class="step-indicator" id="step1">
+                                            <i class="bi bi-download"></i>
+                                            <div>تحميل الفيديو</div>
+                                        </div>
+                                    </div>
+                                    <div class="col">
+                                        <div class="step-indicator" id="step2">
+                                            <i class="bi bi-mic"></i>
+                                            <div>استخراج الصوت</div>
+                                        </div>
+                                    </div>
+                                    <div class="col">
+                                        <div class="step-indicator" id="step3">
+                                            <i class="bi bi-text-paragraph"></i>
+                                            <div>تحويل لنص</div>
+                                        </div>
+                                    </div>
+                                    <div class="col">
+                                        <div class="step-indicator" id="step4">
+                                            <i class="bi bi-translate"></i>
+                                            <div>ترجمة للعربية</div>
+                                        </div>
+                                    </div>
+                                    <div class="col">
+                                        <div class="step-indicator" id="step5">
+                                            <i class="bi bi-film"></i>
+                                            <div>دمج مع الفيديو</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div id="instantStatus" class="text-center mb-3">
+                                    <span id="instantStatusText">جاري التحضير...</span>
+                                </div>
+                            </div>
+
+                            <!-- Result -->
+                            <div id="instantResult" style="display: none;">
+                                <div class="result-card animate__animated animate__fadeIn">
+                                    <h4 class="text-success"><i class="bi bi-check-circle-fill"></i> تمت الترجمة بنجاح!</h4>
+                                    <div class="mt-3">
+                                        <a href="#" id="instantDownloadLink" class="btn btn-success btn-lg">
+                                            <i class="bi bi-download"></i> تحميل الفيديو المترجم
+                                        </a>
+                                        <button class="btn btn-outline-light ms-2" onclick="resetInstant()">
+                                            <i class="bi bi-arrow-clockwise"></i> ترجمة فيديو آخر
+                                        </button>
+                                    </div>
+                                    <div class="mt-3" id="instantTranscript" style="display: none;">
+                                        <label>النص المترجم:</label>
+                                        <textarea class="form-control" rows="5" readonly id="instantTranscriptText"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Download Tab -->
+            <div class="tab-pane fade" id="download" role="tabpanel">
+                <div class="card-custom">
+                    <h3 class="mb-4"><i class="bi bi-cloud-download"></i> تحميل من المنصات</h3>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">رابط الفيديو/الصوت:</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="downloadUrl" 
+                                   placeholder="الصق رابط من YouTube, TikTok, Instagram, Twitter, Facebook...">
+                            <button class="btn btn-custom" type="button" onclick="checkQualities()">
+                                <i class="bi bi-search"></i> فحص الجودات
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="qualitySection" style="display: none;">
+                        <label class="form-label">اختر الجودة:</label>
+                        <div class="quality-selector" id="qualitySelector">
+                            <!-- Will be populated dynamically -->
+                        </div>
+                    </div>
+
+                    <div class="text-center mt-4">
+                        <button class="btn btn-custom btn-lg" onclick="startDownload()" style="min-width: 200px;">
+                            <i class="bi bi-download"></i> بدء التحميل
+                        </button>
+                    </div>
+
+                    <!-- Progress -->
+                    <div class="progress-container" id="downloadProgress">
+                        <div class="progress">
+                            <div class="progress-bar" role="progressbar" style="width: 0%">0%</div>
+                        </div>
+                        <div class="text-center mt-2">
+                            <span id="downloadStatus">جاري التحميل...</span>
+                        </div>
+                    </div>
+
+                    <!-- Results -->
+                    <div class="result-container" id="downloadResult">
+                        <!-- Will be populated dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Subtitle Editor Tab -->
+            <div class="tab-pane fade" id="subtitle" role="tabpanel">
+                <div class="card-custom">
+                    <h3 class="mb-4"><i class="bi bi-badge-cc"></i> محرر الترجمة الاحترافي</h3>
+                    
+                    <!-- Upload Section -->
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">ملف الفيديو:</label>
+                            <div class="upload-area" id="videoUploadArea">
+                                <div class="upload-icon"><i class="bi bi-film"></i></div>
+                                <h4>اسحب ملف الفيديو هنا</h4>
+                                <p>أو انقر للاختيار</p>
+                                <input type="file" id="videoFile" accept="video/*" style="display: none;">
+                            </div>
+                            <div id="videoInfo" style="display: none;">
+                                <div class="file-info">
+                                    <div>
+                                        <div class="file-name" id="videoFileName"></div>
+                                        <div class="file-size" id="videoFileSize"></div>
+                                    </div>
+                                    <button class="btn btn-sm btn-danger" onclick="removeVideo()">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">ملف الترجمة (SRT/ASS):</label>
+                            <div class="upload-area" id="subtitleUploadArea">
+                                <div class="upload-icon"><i class="bi bi-badge-cc"></i></div>
+                                <h4>اسحب ملف الترجمة هنا</h4>
+                                <p>أو انقر للاختيار</p>
+                                <input type="file" id="subtitleFile" accept=".srt,.ass,.ssa,.vtt" style="display: none;">
+                            </div>
+                            <div id="subtitleInfo" style="display: none;">
+                                <div class="file-info">
+                                    <div>
+                                        <div class="file-name" id="subtitleFileName"></div>
+                                        <div class="file-size" id="subtitleFileSize"></div>
+                                    </div>
+                                    <button class="btn btn-sm btn-danger" onclick="removeSubtitle()">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Or Create Subtitle -->
+                    <div class="text-center my-4">
+                        <span>— أو —</span>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">إنشاء ترجمة من نص:</label>
+                        <textarea class="form-control" id="subtitleText" rows="4" 
+                                  placeholder="أدخل النص هنا وسيتم تحويله إلى ملف ترجمة تلقائياً..."></textarea>
+                        <div class="mt-2">
+                            <button class="btn btn-gradient" onclick="createSubtitleFromText()">
+                                <i class="bi bi-file-earmark-text"></i> إنشاء ملف ترجمة
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="section-divider"></div>
+
+                    <!-- Subtitle Settings -->
+                    <h4 class="mb-3"><i class="bi bi-palette"></i> إعدادات الترجمة</h4>
+                    
+                    <div class="row">
+                        <!-- Font Settings -->
+                        <div class="col-md-6">
+                            <h5 class="mb-3">الخط</h5>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">نوع الخط:</label>
+                                <div class="font-selector">
+                                    <div class="font-option selected" data-font="Arial" onclick="selectFont('Arial')">
+                                        Arial (عربي)
+                                    </div>
+                                    <div class="font-option" data-font="Tahoma" onclick="selectFont('Tahoma')">
+                                        Tahoma (عربي)
+                                    </div>
+                                    <div class="font-option" data-font="Traditional Arabic" onclick="selectFont('Traditional Arabic')">
+                                        Traditional Arabic
+                                    </div>
+                                    <div class="font-option" data-font="Simplified Arabic" onclick="selectFont('Simplified Arabic')">
+                                        Simplified Arabic
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">حجم الخط:</label>
+                                <div class="slider-wrapper">
+                                    <input type="range" class="form-range custom-range" id="fontSize" 
+                                           min="10" max="50" value="20" onchange="updatePreview()">
+                                    <span class="slider-value" id="fontSizeValue">20</span>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">لون الخط:</label>
+                                <div class="color-picker-wrapper">
+                                    <input type="color" id="fontColor" value="#FFFFFF" onchange="updatePreview()">
+                                    <div class="color-preview" id="fontColorPreview" 
+                                         style="background: #FFFFFF;" onclick="document.getElementById('fontColor').click()"></div>
+                                    <input type="text" class="form-control" id="fontColorHex" 
+                                           value="#FFFFFF" onchange="updateColorFromHex('font')">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Background Settings -->
+                        <div class="col-md-6">
+                            <h5 class="mb-3">الخلفية</h5>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">لون الخلفية:</label>
+                                <div class="color-picker-wrapper">
+                                    <input type="color" id="bgColor" value="#000000" onchange="updatePreview()">
+                                    <div class="color-preview" id="bgColorPreview" 
+                                         style="background: #000000;" onclick="document.getElementById('bgColor').click()"></div>
+                                    <input type="text" class="form-control" id="bgColorHex" 
+                                           value="#000000" onchange="updateColorFromHex('bg')">
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">شفافية الخلفية:</label>
+                                <div class="slider-wrapper">
+                                    <input type="range" class="form-range custom-range" id="bgOpacity" 
+                                           min="0" max="255" value="128" onchange="updatePreview()">
+                                    <span class="slider-value" id="bgOpacityValue">50%</span>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">موضع الترجمة:</label>
+                                <div class="position-selector">
+                                    <div class="position-option" data-position="top" onclick="selectPosition('top')">
+                                        <i class="bi bi-align-top"></i> أعلى
+                                    </div>
+                                    <div class="position-option" data-position="center" onclick="selectPosition('center')">
+                                        <i class="bi bi-align-middle"></i> وسط
+                                    </div>
+                                    <div class="position-option selected" data-position="bottom" onclick="selectPosition('bottom')">
+                                        <i class="bi bi-align-bottom"></i> أسفل
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Preview -->
+                    <div class="mt-4">
+                        <h5 class="mb-3">معاينة</h5>
+                        <div class="preview-section">
+                            <div class="video-preview">
+                                <video id="videoPreview" style="width: 100%; height: 100%; display: none;" controls></video>
+                                <div id="noVideoPreview" style="color: rgba(255,255,255,0.5);">
+                                    <i class="bi bi-film" style="font-size: 3rem;"></i>
+                                    <p>ارفع فيديو لمعاينة الترجمة عليه</p>
+                                </div>
+                                <div class="subtitle-preview" id="subtitlePreview">
+                                    هذا مثال على شكل الترجمة
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="section-divider"></div>
+
+                    <!-- Export Settings -->
+                    <h4 class="mb-3"><i class="bi bi-gear"></i> إعدادات التصدير</h4>
+                    
+                    <div class="mb-4">
+                        <label class="form-label">جودة الفيديو:</label>
+                        <div class="quality-cards">
+                            <div class="quality-card" data-quality="original" onclick="selectQuality('original')">
+                                <div style="font-size: 2rem;">🎬</div>
+                                <h5>الجودة الأصلية</h5>
+                                <small>بدون إعادة ترميز - أسرع</small>
+                            </div>
+                            <div class="quality-card selected" data-quality="high" onclick="selectQuality('high')">
+                                <div style="font-size: 2rem;">🎥</div>
+                                <h5>جودة عالية</h5>
+                                <small>1080p+ H.264</small>
+                            </div>
+                            <div class="quality-card" data-quality="medium" onclick="selectQuality('medium')">
+                                <div style="font-size: 2rem;">📹</div>
+                                <h5>جودة متوسطة</h5>
+                                <small>720p - حجم أصغر</small>
+                            </div>
+                            <div class="quality-card" data-quality="low" onclick="selectQuality('low')">
+                                <div style="font-size: 2rem;">📱</div>
+                                <h5>جودة منخفضة</h5>
+                                <small>480p - حجم صغير</small>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="text-center">
+                        <button class="btn btn-gradient btn-lg" onclick="startMerge()" id="mergeBtn">
+                            <i class="bi bi-play-fill"></i> بدء الدمج والتصدير
+                        </button>
+                    </div>
+                    
+                    <!-- Progress -->
+                    <div class="progress-container" id="mergeProgress">
+                        <div class="progress">
+                            <div class="progress-bar" id="mergeProgressBar" style="width: 0%">0%</div>
+                        </div>
+                        <div class="text-center mt-2">
+                            <span id="mergeStatus">جاري معالجة الفيديو...</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Result -->
+                    <div class="result-container" id="mergeResult">
+                        <!-- Will be populated dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transcribe Tab -->
+            <div class="tab-pane fade" id="transcribe" role="tabpanel">
+                <div class="card-custom">
+                    <h3 class="mb-4"><i class="bi bi-mic-fill"></i> تحويل الصوت/الفيديو إلى نص</h3>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">اختر ملف الصوت/الفيديو:</label>
+                        <input type="file" class="form-control" id="transcribeFile" accept="audio/*,video/*">
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">اللغة:</label>
+                            <select class="form-select" id="transcribeLanguage">
+                                <option value="auto">كشف تلقائي</option>
+                                <option value="ar">العربية</option>
+                                <option value="en">English</option>
+                                <option value="es">Español</option>
+                                <option value="fr">Français</option>
+                                <option value="de">Deutsch</option>
+                                <option value="it">Italiano</option>
+                                <option value="pt">Português</option>
+                                <option value="ru">Русский</option>
+                                <option value="zh">中文</option>
+                                <option value="ja">日本語</option>
+                                <option value="ko">한국어</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">نموذج Whisper:</label>
+                            <select class="form-select" id="whisperModel">
+                                <option value="tiny">Tiny (سريع جداً)</option>
+                                <option value="base" selected>Base (متوازن)</option>
+                                <option value="small">Small (دقة أفضل)</option>
+                                <option value="medium">Medium (دقة عالية)</option>
+                                <option value="large">Large (أفضل دقة)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="text-center mt-4">
+                        <button class="btn btn-custom btn-lg" onclick="startTranscribe()">
+                            <i class="bi bi-play-circle"></i> بدء التحويل
+                        </button>
+                    </div>
+
+                    <!-- Progress -->
+                    <div class="progress-container" id="transcribeProgress">
+                        <div class="progress">
+                            <div class="progress-bar" role="progressbar" style="width: 0%">0%</div>
+                        </div>
+                        <div class="text-center mt-2">
+                            <span id="transcribeStatus">جاري التحويل...</span>
+                        </div>
+                    </div>
+
+                    <!-- Results -->
+                    <div class="result-container" id="transcribeResult">
+                        <!-- Will be populated dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Translate Tab -->
+            <div class="tab-pane fade" id="translate" role="tabpanel">
+                <div class="card-custom">
+                    <h3 class="mb-4"><i class="bi bi-translate"></i> ترجمة النصوص</h3>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">النص المراد ترجمته:</label>
+                        <textarea class="form-control" id="translateTextInput" rows="5" 
+                                  placeholder="أدخل النص هنا..."></textarea>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">من اللغة:</label>
+                            <select class="form-select" id="sourceLanguage">
+                                <option value="auto">كشف تلقائي</option>
+                                <option value="ar">العربية</option>
+                                <option value="en">English</option>
+                                <option value="es">Español</option>
+                                <option value="fr">Français</option>
+                                <option value="de">Deutsch</option>
+                                <option value="it">Italiano</option>
+                                <option value="pt">Português</option>
+                                <option value="ru">Русский</option>
+                                <option value="zh">中文</option>
+                                <option value="ja">日本語</option>
+                                <option value="ko">한국어</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">إلى اللغة:</label>
+                            <select class="form-select" id="targetLanguage">
+                                <option value="ar" selected>العربية</option>
+                                <option value="en">English</option>
+                                <option value="es">Español</option>
+                                <option value="fr">Français</option>
+                                <option value="de">Deutsch</option>
+                                <option value="it">Italiano</option>
+                                <option value="pt">Português</option>
+                                <option value="ru">Русский</option>
+                                <option value="zh">中文</option>
+                                <option value="ja">日本語</option>
+                                <option value="ko">한국어</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="text-center mt-4">
+                        <button class="btn btn-custom btn-lg" onclick="startTranslate()">
+                            <i class="bi bi-translate"></i> ترجم الآن
+                        </button>
+                    </div>
+
+                    <!-- Results -->
+                    <div class="result-container" id="translateResult">
+                        <!-- Will be populated dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Batch Processing Tab -->
+            <div class="tab-pane fade" id="batch" role="tabpanel">
+                <div class="card-custom">
+                    <h3 class="mb-4"><i class="bi bi-stack"></i> معالجة دفعية</h3>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">قائمة الروابط (رابط في كل سطر):</label>
+                        <textarea class="form-control" id="batchUrls" rows="8" 
+                                  placeholder="https://www.youtube.com/watch?v=xxxxx&#10;https://www.tiktok.com/@user/video/xxxxx&#10;https://www.instagram.com/p/xxxxx"></textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">الجودة الافتراضية:</label>
+                        <select class="form-select" id="batchQuality">
+                            <option value="best">أفضل جودة متاحة</option>
+                            <option value="1080p">1080p Full HD</option>
+                            <option value="720p">720p HD</option>
+                            <option value="480p">480p SD</option>
+                            <option value="audio">صوت فقط (MP3)</option>
+                        </select>
+                    </div>
+
+                    <div class="text-center mt-4">
+                        <button class="btn btn-custom btn-lg" onclick="startBatchDownload()">
+                            <i class="bi bi-download"></i> بدء التحميل الدفعي
+                        </button>
+                    </div>
+
+                    <!-- Progress -->
+                    <div class="progress-container" id="batchProgress">
+                        <div class="mb-2">
+                            <span>التقدم الإجمالي: </span>
+                            <span id="batchCount">0/0</span>
+                        </div>
+                        <div class="progress">
+                            <div class="progress-bar" role="progressbar" style="width: 0%">0%</div>
+                        </div>
+                        <div class="text-center mt-2">
+                            <span id="batchStatus">جاري المعالجة...</span>
+                        </div>
+                    </div>
+
+                    <!-- Results -->
+                    <div class="result-container" id="batchResult">
+                        <!-- Will be populated dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Axios -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    
+    <script>
+        // Global variables
+        let selectedQuality = 'best';
+        let selectedFont = 'Arial';
+        let selectedPosition = 'bottom';
+        let selectedExportQuality = 'high';
+        let videoFileData = null;
+        let subtitleFileData = null;
+
+        // === INSTANT TRANSLATION FUNCTIONS ===
+        async function startInstantTranslation() {
+            const url = document.getElementById('instantUrl').value.trim();
+            
+            if (!url) {
+                showAlert('يرجى إدخال رابط الفيديو', 'warning');
+                return;
+            }
+
+            // Disable button and show progress
+            document.getElementById('instantStartBtn').disabled = true;
+            document.getElementById('instantProgress').style.display = 'block';
+            document.getElementById('instantResult').style.display = 'none';
+
+            try {
+                // Step 1: Download Video
+                await updateInstantStep(1, 'active', 'جاري تحميل الفيديو...');
+                updateInstantProgress(20);
+                
+                const downloadResponse = await axios.post('/api/instant-translate', {
+                    url: url,
+                    step: 'download',
+                    quality: document.getElementById('instantVideoQuality').value
+                });
+
+                if (!downloadResponse.data.success) {
+                    throw new Error(downloadResponse.data.message);
+                }
+
+                await updateInstantStep(1, 'completed');
+
+                // Step 2: Extract Audio
+                await updateInstantStep(2, 'active', 'جاري استخراج الصوت...');
+                updateInstantProgress(35);
+                
+                const audioResponse = await axios.post('/api/instant-translate', {
+                    video_file: downloadResponse.data.file,
+                    step: 'extract_audio'
+                });
+
+                await updateInstantStep(2, 'completed');
+
+                // Step 3: Transcribe
+                await updateInstantStep(3, 'active', 'جاري تحويل الصوت إلى نص...');
+                updateInstantProgress(50);
+                
+                const transcribeResponse = await axios.post('/api/instant-translate', {
+                    audio_file: audioResponse.data.audio_file,
+                    step: 'transcribe',
+                    model: document.getElementById('instantWhisperModel').value,
+                    language: document.getElementById('instantSourceLang').value
+                });
+
+                await updateInstantStep(3, 'completed');
+
+                // Step 4: Translate
+                await updateInstantStep(4, 'active', 'جاري الترجمة إلى العربية...');
+                updateInstantProgress(70);
+                
+                const translateResponse = await axios.post('/api/instant-translate', {
+                    text: transcribeResponse.data.text,
+                    step: 'translate',
+                    source_lang: transcribeResponse.data.language || 'auto',
+                    target_lang: 'ar'
+                });
+
+                await updateInstantStep(4, 'completed');
+
+                // Step 5: Merge with Video
+                await updateInstantStep(5, 'active', 'جاري دمج الترجمة مع الفيديو...');
+                updateInstantProgress(85);
+                
+                const mergeResponse = await axios.post('/api/instant-translate', {
+                    video_file: downloadResponse.data.file,
+                    subtitle_text: translateResponse.data.translated_text,
+                    step: 'merge',
+                    settings: {
+                        font_name: document.getElementById('instantFont')?.value || 'Arial',
+                        font_size: document.getElementById('instantFontSize')?.value || 22,
+                        font_color: document.getElementById('instantFontColor')?.value || '#FFFFFF',
+                        position: document.getElementById('instantPosition')?.value || 'bottom'
+                    }
+                });
+
+                await updateInstantStep(5, 'completed');
+                updateInstantProgress(100, 'اكتملت الترجمة!');
+
+                // Show result
+                document.getElementById('instantDownloadLink').href = mergeResponse.data.download_url;
+                document.getElementById('instantTranscriptText').value = translateResponse.data.translated_text;
+                document.getElementById('instantTranscript').style.display = 'block';
+                document.getElementById('instantResult').style.display = 'block';
+                
+                showAlert('تمت الترجمة الفورية بنجاح! 🎉', 'success');
+
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert(error.message || 'حدث خطأ أثناء المعالجة', 'danger');
+                resetInstantSteps();
+            }
+
+            // Re-enable button
+            document.getElementById('instantStartBtn').disabled = false;
+        }
+
+        async function updateInstantStep(stepNumber, status, message) {
+            const stepElement = document.getElementById(`step${stepNumber}`);
+            
+            // Remove all status classes
+            stepElement.classList.remove('active', 'completed');
+            
+            // Add new status
+            if (status) {
+                stepElement.classList.add(status);
+            }
+            
+            // Update status message
+            if (message) {
+                document.getElementById('instantStatusText').textContent = message;
+            }
+            
+            // Small delay for visual effect
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        function updateInstantProgress(percentage, message) {
+            const progressBar = document.getElementById('instantProgressBar');
+            progressBar.style.width = percentage + '%';
+            progressBar.textContent = percentage + '%';
+            
+            if (message) {
+                document.getElementById('instantStatusText').textContent = message;
+            }
+        }
+
+        function resetInstant() {
+            document.getElementById('instantUrl').value = '';
+            document.getElementById('instantProgress').style.display = 'none';
+            document.getElementById('instantResult').style.display = 'none';
+            document.getElementById('instantProgressBar').style.width = '0%';
+            resetInstantSteps();
+        }
+
+        function resetInstantSteps() {
+            for (let i = 1; i <= 5; i++) {
+                const stepElement = document.getElementById(`step${i}`);
+                stepElement.classList.remove('active', 'completed');
+            }
+            document.getElementById('instantStatusText').textContent = 'جاري التحضير...';
+        }
+
+        // Font size slider
+        document.addEventListener('DOMContentLoaded', function() {
+            const fontSizeSlider = document.getElementById('instantFontSize');
+            if (fontSizeSlider) {
+                fontSizeSlider.addEventListener('input', function() {
+                    document.getElementById('instantFontSizeValue').textContent = this.value;
+                });
+            }
+        });
+
+        // === ORIGINAL FUNCTIONS (keeping them as is) ===
+
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', function() {
+            setupDragDrop();
+            setupFileInputs();
+            updatePreview();
+            displayQualities([]);
+            
+            // Setup sliders
+            document.getElementById('fontSize').addEventListener('input', function() {
+                document.getElementById('fontSizeValue').textContent = this.value;
+                updatePreview();
+            });
+            
+            document.getElementById('bgOpacity').addEventListener('input', function() {
+                const percentage = Math.round((this.value / 255) * 100);
+                document.getElementById('bgOpacityValue').textContent = percentage + '%';
+                updatePreview();
+            });
+            
+            // Setup color inputs
+            document.getElementById('fontColor').addEventListener('input', function() {
+                document.getElementById('fontColorPreview').style.background = this.value;
+                document.getElementById('fontColorHex').value = this.value;
+                updatePreview();
+            });
+            
+            document.getElementById('bgColor').addEventListener('input', function() {
+                document.getElementById('bgColorPreview').style.background = this.value;
+                document.getElementById('bgColorHex').value = this.value;
+                updatePreview();
+            });
+        });
+
+        // === DOWNLOAD FUNCTIONS ===
+        async function checkQualities() {
+            const url = document.getElementById('downloadUrl').value.trim();
+            
+            if (!url) {
+                showAlert('يرجى إدخال رابط صحيح', 'warning');
+                return;
+            }
+
+            try {
+                showLoading('downloadProgress', 'جاري فحص الجودات المتاحة...');
+                
+                const response = await axios.post('/api/get-qualities', { url });
+                
+                if (response.data.success) {
+                    displayQualities(response.data.qualities);
+                    hideLoading('downloadProgress');
+                } else {
+                    showAlert(response.data.message, 'danger');
+                    hideLoading('downloadProgress');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert('خطأ في فحص الجودات', 'danger');
+                hideLoading('downloadProgress');
+            }
+        }
+
+        function displayQualities(qualities) {
+            const qualitySection = document.getElementById('qualitySection');
+            const qualitySelector = document.getElementById('qualitySelector');
+            
+            qualitySelector.innerHTML = '';
+            
+            // Default qualities if none found
+            if (!qualities || qualities.length === 0) {
+                qualities = [
+                    { id: 'best', label: 'أفضل جودة', ext: 'mp4' },
+                    { id: 'medium', label: 'جودة متوسطة', ext: 'mp4' },
+                    { id: 'low', label: 'جودة منخفضة', ext: 'mp4' },
+                    { id: 'audio', label: 'صوت فقط', ext: 'mp3' }
+                ];
+            }
+            
+            qualities.forEach(quality => {
+                const option = document.createElement('div');
+                option.className = 'quality-option';
+                option.dataset.quality = quality.id;
+                
+                if (quality.id === selectedQuality) {
+                    option.classList.add('selected');
+                }
+                
+                let icon = '📹';
+                if (quality.id === 'audio' || quality.ext === 'mp3') {
+                    icon = '🎵';
+                } else if (quality.label.includes('1080') || quality.label.includes('Full HD')) {
+                    icon = '🎬';
+                } else if (quality.label.includes('4K') || quality.label.includes('2160')) {
+                    icon = '🎥';
+                }
+                
+                option.innerHTML = `
+                    <div>${icon}</div>
+                    <div>${quality.label}</div>
+                    <small>${quality.ext.toUpperCase()}</small>
+                `;
+                
+                option.onclick = () => selectDownloadQuality(quality.id);
+                qualitySelector.appendChild(option);
+            });
+            
+            qualitySection.style.display = 'block';
+        }
+
+        function selectDownloadQuality(qualityId) {
+            selectedQuality = qualityId;
+            
+            document.querySelectorAll('#qualitySelector .quality-option').forEach(option => {
+                option.classList.remove('selected');
+                if (option.dataset.quality === qualityId) {
+                    option.classList.add('selected');
+                }
+            });
+        }
+
+        async function startDownload() {
+            const url = document.getElementById('downloadUrl').value.trim();
+            
+            if (!url) {
+                showAlert('يرجى إدخال رابط صحيح', 'warning');
+                return;
+            }
+
+            try {
+                showLoading('downloadProgress', 'جاري التحميل...');
+                updateProgress('downloadProgress', 25, 'الاتصال بالخادم...');
+                
+                const response = await axios.post('/api/download', {
+                    url: url,
+                    quality: selectedQuality
+                });
+                
+                updateProgress('downloadProgress', 75, 'معالجة الملف...');
+                
+                if (response.data.success) {
+                    updateProgress('downloadProgress', 100, 'اكتمل التحميل!');
+                    displayDownloadResult(response.data);
+                } else {
+                    showAlert(response.data.message, 'danger');
+                }
+                
+                hideLoading('downloadProgress');
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert('خطأ في التحميل', 'danger');
+                hideLoading('downloadProgress');
+            }
+        }
+
+        function displayDownloadResult(data) {
+            const resultContainer = document.getElementById('downloadResult');
+            resultContainer.innerHTML = `
+                <div class="result-card animate__animated animate__fadeIn">
+                    <div class="mb-3">
+                        <i class="bi bi-check-circle-fill text-success"></i> تم التحميل بنجاح!
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>${data.info.title}</strong><br>
+                            <small>المدة: ${formatDuration(data.info.duration)} | الجودة: ${data.info.quality}</small>
+                        </div>
+                        <a href="/download/${encodeURIComponent(data.file)}" class="btn btn-success">
+                            <i class="bi bi-download"></i> تحميل
+                        </a>
+                    </div>
+                </div>
+            `;
+            resultContainer.style.display = 'block';
+        }
+
+        // === SUBTITLE EDITOR FUNCTIONS ===
+        function setupDragDrop() {
+            const videoArea = document.getElementById('videoUploadArea');
+            const subtitleArea = document.getElementById('subtitleUploadArea');
+            
+            [videoArea, subtitleArea].forEach(area => {
+                if (!area) return;
+                
+                area.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    area.classList.add('dragover');
+                });
+                
+                area.addEventListener('dragleave', () => {
+                    area.classList.remove('dragover');
+                });
+                
+                area.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    area.classList.remove('dragover');
+                    
+                    const files = e.dataTransfer.files;
+                    if (files.length > 0) {
+                        const inputId = area.id === 'videoUploadArea' ? 'videoFile' : 'subtitleFile';
+                        document.getElementById(inputId).files = files;
+                        handleFileSelect(inputId);
+                    }
+                });
+                
+                area.addEventListener('click', () => {
+                    const inputId = area.id === 'videoUploadArea' ? 'videoFile' : 'subtitleFile';
+                    document.getElementById(inputId).click();
+                });
+            });
+        }
+
+        function setupFileInputs() {
+            const videoInput = document.getElementById('videoFile');
+            const subtitleInput = document.getElementById('subtitleFile');
+            
+            if (videoInput) {
+                videoInput.addEventListener('change', () => handleFileSelect('videoFile'));
+            }
+            if (subtitleInput) {
+                subtitleInput.addEventListener('change', () => handleFileSelect('subtitleFile'));
+            }
+        }
+
+        function handleFileSelect(inputId) {
+            const input = document.getElementById(inputId);
+            const file = input.files[0];
+            
+            if (!file) return;
+            
+            if (inputId === 'videoFile') {
+                videoFileData = file;
+                document.getElementById('videoFileName').textContent = file.name;
+                document.getElementById('videoFileSize').textContent = formatFileSize(file.size);
+                document.getElementById('videoInfo').style.display = 'block';
+                document.getElementById('videoUploadArea').style.display = 'none';
+                
+                // Load video preview
+                const videoPreview = document.getElementById('videoPreview');
+                const url = URL.createObjectURL(file);
+                videoPreview.src = url;
+                videoPreview.style.display = 'block';
+                document.getElementById('noVideoPreview').style.display = 'none';
+            } else {
+                subtitleFileData = file;
+                document.getElementById('subtitleFileName').textContent = file.name;
+                document.getElementById('subtitleFileSize').textContent = formatFileSize(file.size);
+                document.getElementById('subtitleInfo').style.display = 'block';
+                document.getElementById('subtitleUploadArea').style.display = 'none';
+            }
+        }
+
+        function removeVideo() {
+            videoFileData = null;
+            document.getElementById('videoFile').value = '';
+            document.getElementById('videoInfo').style.display = 'none';
+            document.getElementById('videoUploadArea').style.display = 'block';
+            
+            const videoPreview = document.getElementById('videoPreview');
+            videoPreview.src = '';
+            videoPreview.style.display = 'none';
+            document.getElementById('noVideoPreview').style.display = 'block';
+        }
+
+        function removeSubtitle() {
+            subtitleFileData = null;
+            document.getElementById('subtitleFile').value = '';
+            document.getElementById('subtitleInfo').style.display = 'none';
+            document.getElementById('subtitleUploadArea').style.display = 'block';
+        }
+
+        async function createSubtitleFromText() {
+            const text = document.getElementById('subtitleText').value.trim();
+            
+            if (!text) {
+                showAlert('يرجى إدخال نص للترجمة', 'warning');
+                return;
+            }
+            
+            try {
+                const response = await axios.post('/api/create-subtitle', {
+                    text: text,
+                    format: 'srt',
+                    duration: 60
+                });
+                
+                if (response.data.success) {
+                    showAlert('تم إنشاء ملف الترجمة بنجاح', 'success');
+                    
+                    // Simulate file selection
+                    const blob = new Blob([text], { type: 'text/srt' });
+                    const file = new File([blob], response.data.filename, { type: 'text/srt' });
+                    
+                    subtitleFileData = file;
+                    document.getElementById('subtitleFileName').textContent = file.name;
+                    document.getElementById('subtitleFileSize').textContent = formatFileSize(file.size);
+                    document.getElementById('subtitleInfo').style.display = 'block';
+                    document.getElementById('subtitleUploadArea').style.display = 'none';
+                    
+                    // Clear text area
+                    document.getElementById('subtitleText').value = '';
+                }
+            } catch (error) {
+                showAlert('خطأ في إنشاء ملف الترجمة', 'danger');
+            }
+        }
+
+        function selectFont(font) {
+            selectedFont = font;
+            document.querySelectorAll('.font-option').forEach(option => {
+                option.classList.remove('selected');
+                if (option.dataset.font === font) {
+                    option.classList.add('selected');
+                }
+            });
+            updatePreview();
+        }
+
+        function selectPosition(position) {
+            selectedPosition = position;
+            document.querySelectorAll('.position-option').forEach(option => {
+                option.classList.remove('selected');
+                if (option.dataset.position === position) {
+                    option.classList.add('selected');
+                }
+            });
+            updatePreview();
+        }
+
+        function selectQuality(quality) {
+            selectedExportQuality = quality;
+            document.querySelectorAll('.quality-card').forEach(card => {
+                card.classList.remove('selected');
+                if (card.dataset.quality === quality) {
+                    card.classList.add('selected');
+                }
+            });
+        }
+
+        function updatePreview() {
+            const preview = document.getElementById('subtitlePreview');
+            if (!preview) return;
+            
+            const fontSize = document.getElementById('fontSize').value;
+            const fontColor = document.getElementById('fontColor').value;
+            const bgColor = document.getElementById('bgColor').value;
+            const bgOpacity = document.getElementById('bgOpacity').value;
+            
+            preview.style.fontSize = fontSize + 'px';
+            preview.style.color = fontColor;
+            preview.style.fontFamily = selectedFont;
+            
+            // Convert hex to rgba for background
+            const r = parseInt(bgColor.substr(1,2), 16);
+            const g = parseInt(bgColor.substr(3,2), 16);
+            const b = parseInt(bgColor.substr(5,2), 16);
+            const a = bgOpacity / 255;
+            preview.style.backgroundColor = `rgba(${r}, ${g}, ${b}, ${a})`;
+            
+            // Update position
+            if (selectedPosition === 'top') {
+                preview.style.bottom = 'auto';
+                preview.style.top = '50px';
+            } else if (selectedPosition === 'center') {
+                preview.style.bottom = '50%';
+                preview.style.transform = 'translate(-50%, 50%)';
+            } else {
+                preview.style.bottom = '50px';
+                preview.style.top = 'auto';
+                preview.style.transform = 'translateX(-50%)';
+            }
+        }
+
+        function updateColorFromHex(type) {
+            if (type === 'font') {
+                const hex = document.getElementById('fontColorHex').value;
+                document.getElementById('fontColor').value = hex;
+                document.getElementById('fontColorPreview').style.background = hex;
+            } else {
+                const hex = document.getElementById('bgColorHex').value;
+                document.getElementById('bgColor').value = hex;
+                document.getElementById('bgColorPreview').style.background = hex;
+            }
+            updatePreview();
+        }
+
+        async function startMerge() {
+            if (!videoFileData) {
+                showAlert('يرجى رفع ملف الفيديو', 'warning');
+                return;
+            }
+            
+            if (!subtitleFileData) {
+                showAlert('يرجى رفع ملف الترجمة أو إنشاء واحد', 'warning');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('video', videoFileData);
+            formData.append('subtitle', subtitleFileData);
+            formData.append('font_size', document.getElementById('fontSize').value);
+            formData.append('font_color', document.getElementById('fontColor').value);
+            formData.append('bg_color', document.getElementById('bgColor').value);
+            formData.append('bg_opacity', document.getElementById('bgOpacity').value);
+            formData.append('position', selectedPosition);
+            formData.append('font_name', selectedFont);
+            formData.append('quality', selectedExportQuality);
+            
+            // Disable button and show progress
+            document.getElementById('mergeBtn').disabled = true;
+            showLoading('mergeProgress', 'جاري معالجة الفيديو...');
+            
+            // Simulate progress
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                progress += 5;
+                if (progress <= 90) {
+                    updateMergeProgress(progress);
+                }
+            }, 500);
+            
+            try {
+                const response = await axios.post('/api/merge-subtitle', formData, {
+                    headers: {
+                        'Content-Type': 'multipart/form-data'
+                    }
+                });
+                
+                clearInterval(progressInterval);
+                updateMergeProgress(100);
+                
+                if (response.data.success) {
+                    displayMergeResult(response.data);
+                    showAlert('تم دمج الترجمة بنجاح!', 'success');
+                } else {
+                    showAlert(response.data.message, 'danger');
+                }
+            } catch (error) {
+                clearInterval(progressInterval);
+                showAlert('خطأ في دمج الترجمة', 'danger');
+            }
+            
+            // Re-enable button and hide progress
+            document.getElementById('mergeBtn').disabled = false;
+            setTimeout(() => {
+                hideLoading('mergeProgress');
+            }, 2000);
+        }
+
+        function updateMergeProgress(percentage) {
+            const progressBar = document.getElementById('mergeProgressBar');
+            progressBar.style.width = percentage + '%';
+            progressBar.textContent = percentage + '%';
+            
+            if (percentage < 30) {
+                document.getElementById('mergeStatus').textContent = 'جاري تحليل الملفات...';
+            } else if (percentage < 60) {
+                document.getElementById('mergeStatus').textContent = 'جاري معالجة الفيديو...';
+            } else if (percentage < 90) {
+                document.getElementById('mergeStatus').textContent = 'جاري دمج الترجمة...';
+            } else {
+                document.getElementById('mergeStatus').textContent = 'يتم الانتهاء...';
+            }
+        }
+
+        function displayMergeResult(data) {
+            const resultContainer = document.getElementById('mergeResult');
+            resultContainer.innerHTML = `
+                <div class="result-card animate__animated animate__fadeIn">
+                    <h4><i class="bi bi-check-circle-fill text-success"></i> تم الدمج بنجاح!</h4>
+                    <p>تم دمج الترجمة مع الفيديو بنجاح. يمكنك تحميل الملف الآن:</p>
+                    <div class="mt-3">
+                        <a href="${data.download_url}" class="btn btn-gradient btn-lg">
+                            <i class="bi bi-download"></i> تحميل الفيديو
+                        </a>
+                        <button class="btn btn-outline-light ms-2" onclick="resetMerge()">
+                            <i class="bi bi-arrow-clockwise"></i> معالجة فيديو آخر
+                        </button>
+                    </div>
+                </div>
+            `;
+            resultContainer.style.display = 'block';
+        }
+
+        function resetMerge() {
+            removeVideo();
+            removeSubtitle();
+            document.getElementById('subtitleText').value = '';
+            document.getElementById('mergeResult').style.display = 'none';
+            document.getElementById('mergeProgressBar').style.width = '0%';
+            document.getElementById('mergeProgressBar').textContent = '0%';
+        }
+
+        // === TRANSCRIBE FUNCTIONS ===
+        async function startTranscribe() {
+            const fileInput = document.getElementById('transcribeFile');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                showAlert('يرجى اختيار ملف', 'warning');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('language', document.getElementById('transcribeLanguage').value);
+            formData.append('model', document.getElementById('whisperModel').value);
+
+            try {
+                showLoading('transcribeProgress', 'جاري تحويل الملف إلى نص...');
+                updateProgress('transcribeProgress', 30, 'تحليل الصوت...');
+                
+                const response = await axios.post('/api/transcribe', formData, {
+                    headers: {
+                        'Content-Type': 'multipart/form-data'
+                    }
+                });
+                
+                updateProgress('transcribeProgress', 100, 'اكتمل التحويل!');
+                
+                if (response.data.success) {
+                    displayTranscribeResult(response.data);
+                } else {
+                    showAlert(response.data.message, 'danger');
+                }
+                
+                hideLoading('transcribeProgress');
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert('خطأ في التحويل', 'danger');
+                hideLoading('transcribeProgress');
+            }
+        }
+
+        function displayTranscribeResult(data) {
+            const resultContainer = document.getElementById('transcribeResult');
+            resultContainer.innerHTML = `
+                <div class="result-card animate__animated animate__fadeIn">
+                    <h4><i class="bi bi-check-circle-fill text-success"></i> تم التحويل بنجاح!</h4>
+                    <div class="mb-3">
+                        <label class="form-label">النص المحول:</label>
+                        <textarea class="form-control" rows="8" readonly>${data.text}</textarea>
+                    </div>
+                    <div class="mt-3">
+                        <a href="/download/subtitle/${data.srt_file}" class="btn btn-success">
+                            <i class="bi bi-download"></i> تحميل SRT
+                        </a>
+                        <button class="btn btn-primary ms-2" onclick="copyText('${escapeText(data.text)}')">
+                            <i class="bi bi-clipboard"></i> نسخ النص
+                        </button>
+                    </div>
+                </div>
+            `;
+            resultContainer.style.display = 'block';
+        }
+
+        // === TRANSLATE FUNCTIONS ===
+        async function startTranslate() {
+            const text = document.getElementById('translateTextInput').value.trim();
+            
+            if (!text) {
+                showAlert('يرجى إدخال نص للترجمة', 'warning');
+                return;
+            }
+
+            try {
+                const response = await axios.post('/api/translate', {
+                    text: text,
+                    source_lang: document.getElementById('sourceLanguage').value,
+                    target_lang: document.getElementById('targetLanguage').value
+                });
+                
+                if (response.data.success) {
+                    displayTranslateResult(response.data);
+                } else {
+                    showAlert(response.data.message, 'danger');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert('خطأ في الترجمة', 'danger');
+            }
+        }
+
+        function displayTranslateResult(data) {
+            const resultContainer = document.getElementById('translateResult');
+            resultContainer.innerHTML = `
+                <div class="result-card animate__animated animate__fadeIn">
+                    <h4><i class="bi bi-check-circle-fill text-success"></i> تمت الترجمة بنجاح!</h4>
+                    <div class="mb-3">
+                        <label class="form-label">النص المترجم:</label>
+                        <textarea class="form-control" rows="8" readonly>${data.translated_text}</textarea>
+                    </div>
+                    <div class="mt-3">
+                        <button class="btn btn-primary" onclick="copyText('${escapeText(data.translated_text)}')">
+                            <i class="bi bi-clipboard"></i> نسخ النص المترجم
+                        </button>
+                    </div>
+                </div>
+            `;
+            resultContainer.style.display = 'block';
+        }
+
+        // === BATCH FUNCTIONS ===
+        async function startBatchDownload() {
+            const urls = document.getElementById('batchUrls').value.trim().split('\n').filter(u => u);
+            const quality = document.getElementById('batchQuality').value;
+            
+            if (urls.length === 0) {
+                showAlert('يرجى إدخال روابط للتحميل', 'warning');
+                return;
+            }
+
+            const progressContainer = document.getElementById('batchProgress');
+            const resultContainer = document.getElementById('batchResult');
+            
+            progressContainer.style.display = 'block';
+            resultContainer.innerHTML = '';
+            resultContainer.style.display = 'block';
+
+            let completed = 0;
+            const total = urls.length;
+            
+            document.getElementById('batchCount').textContent = `${completed}/${total}`;
+
+            for (let i = 0; i < urls.length; i++) {
+                const url = urls[i];
+                
+                try {
+                    const percentage = ((i + 1) / total) * 100;
+                    updateBatchProgress(percentage, `جاري تحميل ${i + 1} من ${total}...`);
+                    
+                    const response = await axios.post('/api/download', {
+                        url: url,
+                        quality: quality
+                    });
+                    
+                    completed++;
+                    document.getElementById('batchCount').textContent = `${completed}/${total}`;
+                    
+                    // Add result to list
+                    const resultItem = document.createElement('div');
+                    resultItem.className = 'result-card mb-2';
+                    
+                    if (response.data.success) {
+                        resultItem.innerHTML = `
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <i class="bi bi-check-circle text-success"></i>
+                                    <span>${response.data.info.title}</span>
+                                </div>
+                                <a href="/download/${encodeURIComponent(response.data.file)}" class="btn btn-sm btn-success">
+                                    <i class="bi bi-download"></i>
+                                </a>
+                            </div>
+                        `;
+                    } else {
+                        resultItem.innerHTML = `
+                            <div>
+                                <i class="bi bi-x-circle text-danger"></i>
+                                <span>${url} - ${response.data.message}</span>
+                            </div>
+                        `;
+                    }
+                    
+                    resultContainer.appendChild(resultItem);
+                    
+                } catch (error) {
+                    completed++;
+                    document.getElementById('batchCount').textContent = `${completed}/${total}`;
+                    
+                    const resultItem = document.createElement('div');
+                    resultItem.className = 'result-card mb-2';
+                    resultItem.innerHTML = `
+                        <div>
+                            <i class="bi bi-x-circle text-danger"></i>
+                            <span>${url} - خطأ في التحميل</span>
+                        </div>
+                    `;
+                    resultContainer.appendChild(resultItem);
+                }
+            }
+
+            updateBatchProgress(100, 'اكتملت المعالجة الدفعية!');
+            setTimeout(() => {
+                progressContainer.style.display = 'none';
+            }, 3000);
+        }
+
+        function updateBatchProgress(percentage, message) {
+            const progressBar = document.querySelector('#batchProgress .progress-bar');
+            progressBar.style.width = percentage + '%';
+            progressBar.textContent = Math.round(percentage) + '%';
+            document.getElementById('batchStatus').textContent = message;
+        }
+
+        // === HELPER FUNCTIONS ===
+        function showLoading(elementId, message) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            element.querySelector('.progress-bar').style.width = '0%';
+            element.querySelector('.progress-bar').textContent = '0%';
+            const statusElement = document.getElementById(elementId.replace('Progress', 'Status'));
+            if (statusElement) {
+                statusElement.textContent = message;
+            }
+        }
+
+        function hideLoading(elementId) {
+            setTimeout(() => {
+                const element = document.getElementById(elementId);
+                if (element) {
+                    element.style.display = 'none';
+                }
+            }, 2000);
+        }
+
+        function updateProgress(elementId, percentage, message) {
+            const element = document.getElementById(elementId);
+            element.querySelector('.progress-bar').style.width = percentage + '%';
+            element.querySelector('.progress-bar').textContent = percentage + '%';
+            if (message) {
+                const statusElement = document.getElementById(elementId.replace('Progress', 'Status'));
+                if (statusElement) {
+                    statusElement.textContent = message;
+                }
+            }
+        }
+
+        function showAlert(message, type) {
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type} alert-dismissible fade show position-fixed top-0 start-50 translate-middle-x mt-3`;
+            alert.style.zIndex = '9999';
+            alert.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            document.body.appendChild(alert);
+            
+            setTimeout(() => {
+                alert.remove();
+            }, 5000);
+        }
+
+        function copyText(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                showAlert('تم النسخ إلى الحافظة!', 'success');
+            }).catch(err => {
+                showAlert('فشل النسخ', 'danger');
+            });
+        }
+
+        function escapeText(text) {
+            return text.replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n');
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds) return 'غير محدد';
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            
+            if (h > 0) {
+                return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+            } else {
+                return `${m}:${s.toString().padStart(2, '0')}`;
+            }
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+    </script>
+</body>
+</html>
