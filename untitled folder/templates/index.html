@@ -2666,7 +2666,7 @@
 
         // ========== BATCH FUNCTIONS ==========
         window.startBatchDownload = async function() {
-            const urls = document.getElementById('batchUrls').value.trim().split('\n').filter(u => u);
+            const urls = document.getElementById('batchUrls').value.trim().split('\n').filter(u => u.trim());
             const quality = document.getElementById('batchQuality')?.value || '720p';
             
             if (urls.length === 0) {
@@ -2676,16 +2676,55 @@
 
             showAlert(`بدء تحميل ${urls.length} فيديو...`, 'info');
             
+            // تحديد format command
+            let formatCommand = quality;
+            if (quality === 'best') {
+                formatCommand = 'bestvideo+bestaudio/best';
+            } else if (quality === '720p' || quality === 'medium') {
+                formatCommand = 'bestvideo[height<=720]+bestaudio/best[height<=720]';
+            } else if (quality === '480p' || quality === 'low') {
+                formatCommand = 'bestvideo[height<=480]+bestaudio/best[height<=480]';
+            } else if (quality === '1080p') {
+                formatCommand = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]';
+            } else if (quality === '4k' || quality === '2160p') {
+                formatCommand = 'bestvideo[height<=2160]+bestaudio/best[height<=2160]';
+            }
+            
+            let successCount = 0;
+            let failCount = 0;
+            
             for (let i = 0; i < urls.length; i++) {
-                const url = urls[i];
+                const url = urls[i].trim();
+                if (!url) continue;
+                
                 try {
-                    await axios.post('/api/download', { url: url, quality: quality });
+                    const response = await axios.post('/api/media/download', {
+                        url: url,
+                        format: formatCommand,
+                        quality: quality,
+                        audio_only: false
+                    });
+                    
+                    if (response.data.success) {
+                        successCount++;
+                        console.log(`Started download ${i + 1}/${urls.length}: ${url}`);
+                    } else {
+                        failCount++;
+                        console.error(`Failed to start download ${i + 1}/${urls.length}: ${url}`);
+                    }
                 } catch (error) {
-                    console.error(`Error downloading ${url}:`, error);
+                    failCount++;
+                    console.error(`Error downloading ${i + 1}/${urls.length} (${url}):`, error);
+                }
+                
+                // تأخير صغير بين الطلبات لتجنب الحمل الزائد
+                if (i < urls.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 500));
                 }
             }
             
-            showAlert('اكتملت المعالجة الدفعية!', 'success');
+            showAlert(`اكتملت المعالجة الدفعية! نجح: ${successCount}, فشل: ${failCount}`, 
+                     failCount === 0 ? 'success' : 'warning');
         };
 
         // ========== HELPER FUNCTIONS ==========

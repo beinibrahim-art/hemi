@@ -1961,6 +1961,169 @@ def api_get_download_progress(download_id):
     return jsonify(progress)
 
 
+@app.route('/api/transcribe', methods=['POST'])
+def api_transcribe():
+    """API للتحويل إلى نص من ملف"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'message': 'لم يتم رفع ملف'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'message': 'لم يتم اختيار ملف'}), 400
+        
+        # حفظ الملف
+        filename = secure_filename(file.filename)
+        file_path = Path(app.config['UPLOAD_FOLDER']) / filename
+        file.save(str(file_path))
+        
+        # استخراج الصوت إذا كان فيديو
+        audio_file = str(file_path)
+        if filename.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv')):
+            audio_file = str(file_path).rsplit('.', 1)[0] + '_audio.wav'
+            if not VideoProcessor.extract_audio(str(file_path), audio_file):
+                return jsonify({'success': False, 'message': 'فشل استخراج الصوت'}), 500
+        
+        # التحويل إلى نص
+        model = request.form.get('model', 'base')
+        language = request.form.get('language', 'auto')
+        
+        result = whisper_transcriber.transcribe(audio_file, model, language)
+        
+        # حذف الملفات المؤقتة
+        try:
+            if audio_file != str(file_path):
+                os.remove(audio_file)
+            os.remove(str(file_path))
+        except:
+            pass
+        
+        return jsonify({
+            'success': True,
+            'text': result.get('text', ''),
+            'language': result.get('language', language),
+            'segments': result.get('segments', [])
+        })
+    
+    except Exception as e:
+        logger.error(f"Transcribe error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/transcribe-from-url', methods=['POST'])
+def api_transcribe_from_url():
+    """API للتحويل إلى نص من رابط"""
+    try:
+        data = request.json
+        url = data.get('url')
+        quality = data.get('quality', '720p')
+        model = data.get('model', 'base')
+        language = data.get('language', 'auto')
+        
+        if not url:
+            return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
+        
+        # تحميل الفيديو
+        download_folder = Path(app.config['DOWNLOAD_FOLDER'])
+        
+        # تحديد format command
+        if quality == 'best':
+            format_cmd = 'bestvideo+bestaudio/best'
+        elif quality == '720p':
+            format_cmd = 'bestvideo[height<=720]+bestaudio/best[height<=720]'
+        elif quality == '480p':
+            format_cmd = 'bestvideo[height<=480]+bestaudio/best[height<=480]'
+        elif quality == '1080p':
+            format_cmd = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]'
+        else:
+            format_cmd = quality
+        
+        ydl_opts = {
+            'format': format_cmd,
+            'outtmpl': str(download_folder / '%(title)s.%(ext)s'),
+            'quiet': True,
+            'no_warnings': True
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+        
+        # التأكد من أن الملف موجود
+        if not os.path.exists(filename):
+            video_files = []
+            for file in download_folder.iterdir():
+                if file.is_file():
+                    ext = file.suffix.lower()
+                    if ext in ['.mp4', '.webm', '.mkv', '.mov', '.avi', '.flv']:
+                        video_files.append((file, file.stat().st_mtime))
+            
+            if video_files:
+                video_files.sort(key=lambda x: x[1], reverse=True)
+                filename = str(video_files[0][0])
+        
+        if not os.path.exists(filename):
+            return jsonify({'success': False, 'message': 'فشل تحميل الفيديو'}), 400
+        
+        # استخراج الصوت
+        audio_file = filename.rsplit('.', 1)[0] + '_audio.wav'
+        if not VideoProcessor.extract_audio(filename, audio_file):
+            return jsonify({'success': False, 'message': 'فشل استخراج الصوت'}), 500
+        
+        # التحويل إلى نص
+        result = whisper_transcriber.transcribe(audio_file, model, language)
+        
+        # حذف الملفات المؤقتة
+        try:
+            os.remove(audio_file)
+        except:
+            pass
+        
+        return jsonify({
+            'success': True,
+            'text': result.get('text', ''),
+            'language': result.get('language', language),
+            'segments': result.get('segments', [])
+        })
+    
+    except Exception as e:
+        logger.error(f"Transcribe from URL error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/translate', methods=['POST'])
+def api_translate():
+    """API للترجمة"""
+    try:
+        data = request.json
+        text = data.get('text')
+        source_lang = data.get('source_lang', 'auto')
+        target_lang = data.get('target_lang', 'ar')
+        
+        if not text:
+            return jsonify({'success': False, 'message': 'لا يوجد نص للترجمة'}), 400
+        
+        if not TRANSLATOR_AVAILABLE:
+            return jsonify({'success': False, 'message': 'المترجم غير متوفر'}), 503
+        
+        translator = GoogleTranslator(source=source_lang, target=target_lang)
+        translated = translator.translate(text)
+        
+        return jsonify({
+            'success': True,
+            'translated_text': translated,
+            'source_lang': source_lang,
+            'target_lang': target_lang
+        })
+    
+    except Exception as e:
+        logger.error(f"Translate error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @app.route('/api/download', methods=['POST'])
 def api_download():
     """API للتحميل"""
