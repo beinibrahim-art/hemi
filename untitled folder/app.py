@@ -1097,11 +1097,58 @@ class UnifiedDownloadManager:
             downloaded_file = self._find_downloaded_file(url)
             
             if not downloaded_file:
+                # محاولة أخرى بعد انتظار قصير
+                import time
+                time.sleep(2)
+                downloaded_file = self._find_downloaded_file(url)
+            
+            if not downloaded_file:
+                # البحث في جميع الملفات في المجلد
+                download_folder = self.downloader.output_dir
+                if download_folder.exists():
+                    all_files = []
+                    for file in download_folder.iterdir():
+                        if file.is_file():
+                            ext = file.suffix.lower()
+                            if ext in ['.mp4', '.webm', '.mkv', '.mp3', '.m4a', '.mov', '.avi', '.flv']:
+                                all_files.append((file, file.stat().st_mtime))
+                    
+                    if all_files:
+                        all_files.sort(key=lambda x: x[1], reverse=True)
+                        downloaded_file = str(all_files[0][0])
+                        logger.info(f"Found file using fallback method: {downloaded_file}")
+            
+            if not downloaded_file:
                 return {
                     'success': False,
                     'message': 'تم التحميل لكن الملف غير موجود',
                     'error': 'File not found'
                 }
+            
+            # التأكد من أن الملف موجود
+            if not os.path.exists(downloaded_file):
+                # محاولة البحث مرة أخرى
+                basename = os.path.basename(downloaded_file)
+                possible_paths = [
+                    os.path.join(str(self.downloader.output_dir), basename),
+                    downloaded_file
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        downloaded_file = path
+                        break
+            
+            if not os.path.exists(downloaded_file):
+                logger.error(f"Downloaded file not found: {downloaded_file}")
+                return {
+                    'success': False,
+                    'message': f'الملف غير موجود: {downloaded_file}',
+                    'error': 'File not found'
+                }
+            
+            # تحديث progress_tracker بالملف
+            if download_id in self.progress_tracker:
+                self.progress_tracker[download_id]['file'] = downloaded_file
             
             # إذا كان النوع transcribe، قم بالتفريغ النصي
             if media_type == self.MEDIA_TYPE_TRANSCRIBE:
@@ -1204,13 +1251,9 @@ class UnifiedDownloadManager:
         return self.QUALITY_PRESETS.get('auto', 'bestvideo+bestaudio/best')
     
     def _find_downloaded_file(self, url: str) -> Optional[str]:
-        """البحث عن الملف المحمّل"""
+        """البحث عن الملف المحمّل - نسخة محسّنة"""
         try:
-            # الحصول على معلومات الفيديو
-            info = self.downloader._get_video_info(url)
-            title = info.get('title', 'video')
-            
-            # البحث عن الملف الأحدث
+            # البحث عن الملف الأحدث في مجلد التحميل
             download_folder = self.downloader.output_dir
             if download_folder.exists():
                 video_files = []
@@ -1221,10 +1264,18 @@ class UnifiedDownloadManager:
                             video_files.append((file, file.stat().st_mtime))
                 
                 if video_files:
+                    # ترتيب حسب وقت التعديل (الأحدث أولاً)
                     video_files.sort(key=lambda x: x[1], reverse=True)
-                    return str(video_files[0][0])
+                    latest_file = video_files[0][0]
+                    
+                    # التأكد من أن الملف موجود ويمكن الوصول إليه
+                    if latest_file.exists() and latest_file.is_file():
+                        logger.info(f"Found downloaded file: {latest_file}")
+                        return str(latest_file)
+                    
         except Exception as e:
             logger.error(f"Error finding downloaded file: {e}")
+            logger.error(traceback.format_exc())
         
         return None
     
@@ -2020,55 +2071,100 @@ def api_instant_translate():
             if result['success']:
                 download_id = result.get('download_id')
                 
-                # الانتظار قليلاً ثم التحقق من التقدم
+                # الانتظار حتى يكتمل التحميل (مهم جداً!)
                 import time
-                time.sleep(3)  # انتظار قصير للبدء
+                max_wait_time = 120  # 120 ثانية كحد أقصى
+                wait_interval = 2  # التحقق كل ثانيتين
+                waited = 0
                 
-                # الحصول على حالة التحميل
-                progress = unified_downloader.get_progress(download_id)
+                video_file = None
+                while waited < max_wait_time:
+                    progress = unified_downloader.get_progress(download_id)
+                    
+                    if progress.get('status') == 'completed' and progress.get('file'):
+                        file_info = progress.get('file')
+                        if isinstance(file_info, dict):
+                            video_file = file_info.get('video', file_info.get('file'))
+                        else:
+                            video_file = file_info
+                        
+                        if video_file and os.path.exists(video_file):
+                            break
+                        elif video_file:
+                            # البحث عن الملف في مجلد التحميل
+                            basename = os.path.basename(video_file)
+                            possible_paths = [
+                                os.path.join(app.config['DOWNLOAD_FOLDER'], basename),
+                                video_file
+                            ]
+                            for path in possible_paths:
+                                if os.path.exists(path):
+                                    video_file = path
+                                    break
+                        
+                        if video_file and os.path.exists(video_file):
+                            break
+                            
+                    elif progress.get('status') == 'error':
+                        return jsonify({
+                            'success': False,
+                            'message': progress.get('message', 'فشل التحميل')
+                        }), 400
+                    
+                    time.sleep(wait_interval)
+                    waited += wait_interval
                 
-                if progress.get('status') == 'completed' and progress.get('file'):
-                    video_file = progress.get('file')
-                    if isinstance(video_file, dict):
-                        video_file = video_file.get('video', video_file)
-                    
-                    if not os.path.isabs(video_file):
-                        video_file = os.path.join(app.config['DOWNLOAD_FOLDER'], os.path.basename(video_file))
-                    video_file = os.path.normpath(video_file)
-                    
-                    if not os.path.exists(video_file):
-                        basename = os.path.basename(video_file)
-                        possible_paths = [
-                            os.path.join(app.config['DOWNLOAD_FOLDER'], basename),
-                            video_file
-                        ]
-                        for path in possible_paths:
-                            if os.path.exists(path):
-                                video_file = path
-                                break
-                    
-                    # استخدام ملف مؤقت بدلاً من session
-                    temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
-                    with open(temp_file, 'w') as f:
-                        f.write(video_file)
-                    
+                # إذا لم نجد الملف من progress، ابحث في مجلد التحميل مباشرة
+                if not video_file or not os.path.exists(video_file):
+                    download_folder = Path(app.config['DOWNLOAD_FOLDER'])
+                    if download_folder.exists():
+                        video_files = []
+                        for file in download_folder.iterdir():
+                            if file.is_file():
+                                ext = file.suffix.lower()
+                                if ext in ['.mp4', '.webm', '.mkv', '.mov', '.avi', '.flv']:
+                                    video_files.append((file, file.stat().st_mtime))
+                        
+                        if video_files:
+                            video_files.sort(key=lambda x: x[1], reverse=True)
+                            latest_file = video_files[0][0]
+                            if latest_file.exists():
+                                video_file = str(latest_file)
+                                logger.info(f"Found file using folder scan: {video_file}")
+                
+                if not video_file or not os.path.exists(video_file):
+                    logger.error(f"Video file not found after download. download_id: {download_id}, waited: {waited}s")
                     return jsonify({
-                        'success': True,
-                        'file': video_file,
-                        'info': progress.get('info', {}),
-                        'temp_file': os.path.basename(temp_file),
-                        'download_id': download_id
-                    })
-                else:
-                    # التحميل ما زال قيد التنفيذ - إرجاع download_id للانتظار
-                    return jsonify({
-                        'success': True,
+                        'success': False,
+                        'message': 'تم التحميل لكن الملف غير موجود',
                         'download_id': download_id,
-                        'status': 'downloading',
-                        'message': 'جاري التحميل... يرجى الانتظار ثم المحاولة مرة أخرى',
-                        'check_progress': f'/api/media/progress/{download_id}',
-                        'wait': True  # علامة للواجهة للانتظار
-                    })
+                        'debug': {
+                            'download_id': download_id,
+                            'waited_seconds': waited,
+                            'progress_status': unified_downloader.get_progress(download_id).get('status') if download_id else None
+                        }
+                    }), 400
+                
+                # التأكد من أن المسار مطلق
+                if not os.path.isabs(video_file):
+                    video_file = os.path.abspath(video_file)
+                
+                video_file = os.path.normpath(video_file)
+                
+                # استخدام ملف مؤقت بدلاً من session
+                temp_file = os.path.join(app.config['DOWNLOAD_FOLDER'], f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+                with open(temp_file, 'w') as f:
+                    f.write(video_file)
+                
+                logger.info(f"Download completed. File: {video_file}, temp_file: {os.path.basename(temp_file)}")
+                
+                return jsonify({
+                    'success': True,
+                    'file': video_file,
+                    'info': unified_downloader.get_progress(download_id).get('info', {}),
+                    'temp_file': os.path.basename(temp_file),
+                    'download_id': download_id
+                })
             else:
                 error_message = result.get('message', 'حدث خطأ غير معروف أثناء التحميل')
                 logger.error(f"Download failed: {error_message}")
