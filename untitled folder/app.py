@@ -2125,28 +2125,139 @@ def api_transcribe_from_url():
 
 @app.route('/api/translate', methods=['POST'])
 def api_translate():
-    """API للترجمة"""
+    """API للترجمة - يدعم النص وملفات SRT"""
     try:
-        data = request.json
-        text = data.get('text')
-        source_lang = data.get('source_lang', 'auto')
-        target_lang = data.get('target_lang', 'ar')
+        # التحقق من نوع الطلب (JSON أو FormData)
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            # رفع ملف SRT
+            if 'srt_file' not in request.files:
+                return jsonify({'success': False, 'message': 'لم يتم رفع ملف SRT'}), 400
+            
+            srt_file = request.files['srt_file']
+            if srt_file.filename == '':
+                return jsonify({'success': False, 'message': 'لم يتم اختيار ملف'}), 400
+            
+            source_lang = request.form.get('source_lang', 'auto')
+            target_lang = request.form.get('target_lang', 'ar')
+            
+            # حفظ الملف مؤقتاً
+            filename = secure_filename(srt_file.filename)
+            file_path = Path(app.config['UPLOAD_FOLDER']) / f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}"
+            srt_file.save(str(file_path))
+            
+            # قراءة ملف SRT
+            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                srt_content = f.read()
+            
+            # تحليل ملف SRT
+            segments = []
+            lines = srt_content.strip().split('\n')
+            i = 0
+            
+            while i < len(lines):
+                if lines[i].strip().isdigit():
+                    if i + 2 < len(lines):
+                        timing = lines[i + 1].strip()
+                        text = lines[i + 2].strip()
+                        
+                        if ' --> ' in timing and text:
+                            start, end = timing.split(' --> ')
+                            # تحويل التوقيت إلى ثواني
+                            def time_to_seconds(time_str):
+                                time_str = time_str.replace(',', '.')
+                                parts = time_str.split(':')
+                                if len(parts) == 3:
+                                    hours = int(parts[0])
+                                    minutes = int(parts[1])
+                                    secs = float(parts[2])
+                                    return hours * 3600 + minutes * 60 + secs
+                                return 0.0
+                            
+                            start_sec = time_to_seconds(start)
+                            end_sec = time_to_seconds(end)
+                            
+                            segments.append({
+                                'start': start_sec,
+                                'end': end_sec,
+                                'text': text
+                            })
+                        i += 4
+                    else:
+                        i += 1
+                else:
+                    i += 1
+            
+            if not segments:
+                return jsonify({'success': False, 'message': 'ملف SRT فارغ أو غير صحيح'}), 400
+            
+            # ترجمة كل segment
+            if not TRANSLATOR_AVAILABLE:
+                return jsonify({'success': False, 'message': 'المترجم غير متوفر'}), 503
+            
+            translator = GoogleTranslator(source=source_lang, target=target_lang)
+            translated_segments = []
+            
+            for seg in segments:
+                try:
+                    translated_text = translator.translate(seg['text'])
+                    translated_segments.append({
+                        'start': seg['start'],
+                        'end': seg['end'],
+                        'text': translated_text
+                    })
+                except Exception as e:
+                    logger.warning(f"Translation failed for segment: {e}")
+                    translated_segments.append(seg)  # استخدام النص الأصلي في حالة الفشل
+            
+            # إنشاء ملف SRT مترجم
+            cleaned_segments = SubtitleProcessor.clean_and_merge_segments(translated_segments)
+            translated_srt_content = SubtitleProcessor.create_srt(cleaned_segments)
+            
+            if translated_srt_content:
+                srt_filename = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
+                srt_path = Path(app.config['SUBTITLE_FOLDER']) / srt_filename
+                SubtitleProcessor.save_srt_file(translated_srt_content, srt_path)
+                
+                # حذف الملف المؤقت
+                try:
+                    os.remove(str(file_path))
+                except:
+                    pass
+                
+                return jsonify({
+                    'success': True,
+                    'translated_text': ' '.join([s['text'] for s in translated_segments]),
+                    'translated_segments': translated_segments,
+                    'srt_file': srt_filename,
+                    'srt_url': f'/download/{srt_filename}',
+                    'source_lang': source_lang,
+                    'target_lang': target_lang
+                })
+            else:
+                return jsonify({'success': False, 'message': 'فشل إنشاء ملف SRT مترجم'}), 500
         
-        if not text:
-            return jsonify({'success': False, 'message': 'لا يوجد نص للترجمة'}), 400
-        
-        if not TRANSLATOR_AVAILABLE:
-            return jsonify({'success': False, 'message': 'المترجم غير متوفر'}), 503
-        
-        translator = GoogleTranslator(source=source_lang, target=target_lang)
-        translated = translator.translate(text)
-        
-        return jsonify({
-            'success': True,
-            'translated_text': translated,
-            'source_lang': source_lang,
-            'target_lang': target_lang
-        })
+        else:
+            # ترجمة نص عادي
+            data = request.json
+            text = data.get('text')
+            source_lang = data.get('source_lang', 'auto')
+            target_lang = data.get('target_lang', 'ar')
+            
+            if not text:
+                return jsonify({'success': False, 'message': 'لا يوجد نص للترجمة'}), 400
+            
+            if not TRANSLATOR_AVAILABLE:
+                return jsonify({'success': False, 'message': 'المترجم غير متوفر'}), 503
+            
+            translator = GoogleTranslator(source=source_lang, target=target_lang)
+            translated = translator.translate(text)
+            
+            return jsonify({
+                'success': True,
+                'translated_text': translated,
+                'source_lang': source_lang,
+                'target_lang': target_lang
+            })
     
     except Exception as e:
         logger.error(f"Translate error: {e}")
