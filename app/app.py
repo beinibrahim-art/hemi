@@ -93,6 +93,10 @@ class VideoDownloader:
                 return platform
         return 'generic'
     
+    def is_youtube_shorts(self, url: str) -> bool:
+        """التحقق من إذا كان الرابط YouTube Shorts"""
+        return '/shorts/' in url.lower() or 'youtube.com/shorts/' in url.lower()
+    
     def get_ydl_opts(self, platform: str, quality: str = 'best') -> dict:
         """الحصول على إعدادات yt-dlp"""
         opts = {
@@ -116,6 +120,8 @@ class VideoDownloader:
                     'player_client': ['web'],  # استخدام web فقط لتجنب مشاكل android
                 }
             },
+            # السماح بتحميل أي تنسيق متاح
+            'format_sort': ['res', 'ext:mp4:m4a', 'codec', 'size'],
         }
         
         # إعدادات الجودة مع fallback أفضل
@@ -157,41 +163,87 @@ class VideoDownloader:
         
         try:
             platform = self.detect_platform(url)
+            is_shorts = self.is_youtube_shorts(url)
+            
+            # لـ YouTube Shorts، استخدام إعدادات خاصة
+            if is_shorts:
+                logger.info("Detected YouTube Shorts - using special handling")
+            
+            # أولاً: محاولة استخراج المعلومات بدون format محدد لمعرفة التنسيقات المتاحة
+            try:
+                ydl_opts_info = self.get_ydl_opts(platform, quality)
+                ydl_opts_info['format'] = None  # بدون format محدد
+                
+                with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    
+                    if not info:
+                        raise Exception("لم يتم العثور على معلومات الفيديو")
+                    
+                    # الحصول على التنسيقات المتاحة
+                    formats = info.get('formats', [])
+                    available_formats = []
+                    
+                    for fmt in formats:
+                        if fmt.get('vcodec') != 'none' or fmt.get('acodec') != 'none':
+                            available_formats.append(fmt.get('format_id'))
+                    
+                    logger.info(f"Available formats: {available_formats[:10]}")  # أول 10 تنسيقات
+            except Exception as e:
+                logger.warning(f"Could not get format list: {e}")
+                available_formats = []
             
             # محاولة التحميل مع fallback للتنسيقات
             formats_to_try = []
             
-            if quality == 'best':
+            # لـ YouTube Shorts، استخدام تنسيقات أبسط
+            if is_shorts:
                 formats_to_try = [
-                    'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best',
-                    'bestvideo+bestaudio/best',
-                    'best'
+                    'best',  # أفضل تنسيق متاح
+                    'worst',  # أي تنسيق متاح
+                    None  # بدون format محدد
+                ]
+            elif quality == 'best':
+                formats_to_try = [
+                    'best',  # أفضل تنسيق متاح بدون قيود
+                    'worst',  # أي تنسيق متاح
+                    None  # بدون format محدد - yt-dlp سيختار تلقائياً
                 ]
             elif quality == '720p' or quality == 'medium':
                 formats_to_try = [
-                    'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best',
-                    'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
-                    'best[height<=720]/best'
+                    'best[height<=720]',
+                    'best[height<=1080]',
+                    'best',
+                    None
                 ]
             elif quality == '480p' or quality == 'low':
                 formats_to_try = [
-                    'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]/best',
-                    'bestvideo[height<=480]+bestaudio/best[height<=480]/best',
-                    'best[height<=480]/best'
+                    'best[height<=480]',
+                    'best[height<=720]',
+                    'best',
+                    None
                 ]
             elif quality == 'audio':
                 formats_to_try = [
-                    'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
-                    'bestaudio'
+                    'bestaudio',
+                    'worstaudio',
+                    None
                 ]
             else:
-                formats_to_try = [quality, 'best']
+                formats_to_try = [quality, 'best', None]
             
             last_error = None
             for format_str in formats_to_try:
                 try:
                     ydl_opts = self.get_ydl_opts(platform, quality)
-                    ydl_opts['format'] = format_str
+                    if format_str is not None:
+                        ydl_opts['format'] = format_str
+                    else:
+                        # بدون format محدد - yt-dlp سيختار تلقائياً
+                        ydl_opts.pop('format', None)
+                    
+                    # إضافة ignoreerrors للسماح بالتخطي عند الفشل
+                    ydl_opts['ignoreerrors'] = False
                     
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         # استخراج المعلومات أولاً
@@ -232,7 +284,7 @@ class VideoDownloader:
                                         video_files = []
                                         for file in os.listdir(download_folder):
                                             file_path = os.path.join(download_folder, file)
-                                            if os.path.isfile(file_path) and file.endswith(('.mp4', '.webm', '.mkv', '.mp3', '.m4a')):
+                                            if os.path.isfile(file_path) and file.endswith(('.mp4', '.webm', '.mkv', '.mp3', '.m4a', '.mov', '.avi')):
                                                 video_files.append((file_path, os.path.getmtime(file_path)))
                                         
                                         if video_files:
@@ -255,12 +307,22 @@ class VideoDownloader:
                         
                 except Exception as e:
                     last_error = e
-                    logger.warning(f"Failed with format {format_str}: {e}")
-                    continue
+                    error_msg = str(e)
+                    # تخطي الأخطاء المتعلقة بالتنسيقات غير المتاحة
+                    if 'format is not available' in error_msg or 'Only images are available' in error_msg:
+                        logger.warning(f"Format {format_str} not available, trying next...")
+                        continue
+                    else:
+                        logger.warning(f"Failed with format {format_str}: {e}")
+                        continue
             
             # إذا فشلت جميع المحاولات
             if last_error:
-                raise last_error
+                error_msg = str(last_error)
+                if 'format is not available' in error_msg or 'Only images are available' in error_msg:
+                    raise Exception("هذا الفيديو غير متاح للتحميل. قد يكون محمياً أو متاحاً فقط كصور. يرجى المحاولة مع فيديو آخر.")
+                else:
+                    raise last_error
             else:
                 raise Exception("فشل التحميل بعد محاولات متعددة")
         
