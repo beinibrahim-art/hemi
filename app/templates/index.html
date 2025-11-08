@@ -1075,9 +1075,9 @@
         let selectedExportQuality = 'high';
         let videoFileData = null;
         let subtitleFileData = null;
-        let instantSelectedFont = 'Arial';
-        let instantSelectedPosition = 'bottom';
-        let instantSelectedQuality = 'original';
+        window.instantSelectedFont = 'Arial';
+        window.instantSelectedPosition = 'bottom';
+        window.instantSelectedQuality = 'original';
         let instantVideoDimensions = { width: 1920, height: 1080 };
         let instantVerticalOffset = 0;
         
@@ -1679,7 +1679,7 @@
         };
 
         window.selectInstantFont = function(font) {
-            instantSelectedFont = font;
+            window.instantSelectedFont = font;
             document.querySelectorAll('#instantSubtitleSettings .font-option-glass').forEach(option => {
                 option.classList.remove('selected');
                 if (option.dataset.font === font) {
@@ -1690,7 +1690,7 @@
         };
 
         window.selectInstantPosition = function(position) {
-            instantSelectedPosition = position;
+            window.instantSelectedPosition = position;
             document.querySelectorAll('#instantSubtitleSettings .position-option-glass').forEach(option => {
                 option.classList.remove('selected');
                 if (option.dataset.position === position) {
@@ -1701,7 +1701,7 @@
         };
 
         window.selectInstantQuality = function(quality) {
-            instantSelectedQuality = quality;
+            window.instantSelectedQuality = quality;
             document.querySelectorAll('#instantSubtitleSettings .quality-card-glass').forEach(card => {
                 card.classList.remove('selected');
                 if (card.dataset.quality === quality) {
@@ -1722,7 +1722,7 @@
             
             preview.style.fontSize = fontSize + 'px';
             preview.style.color = fontColor;
-            preview.style.fontFamily = instantSelectedFont;
+            preview.style.fontFamily = window.instantSelectedFont;
             
             const r = parseInt(bgColor.substr(1,2), 16);
             const g = parseInt(bgColor.substr(3,2), 16);
@@ -1733,11 +1733,11 @@
             preview.style.left = '50%';
             
             // تطبيق vertical_offset
-            if (instantSelectedPosition === 'top') {
+            if (window.instantSelectedPosition === 'top') {
                 preview.style.top = `${50 - instantVerticalOffset}px`;
                 preview.style.bottom = 'auto';
                 preview.style.transform = 'translateX(-50%)';
-            } else if (instantSelectedPosition === 'center') {
+            } else if (window.instantSelectedPosition === 'center') {
                 preview.style.top = '50%';
                 preview.style.bottom = 'auto';
                 preview.style.transform = `translate(-50%, calc(-50% - ${instantVerticalOffset}px))`;
@@ -1810,9 +1810,9 @@
                     font_color: fontColor,
                     bg_color: bgColor,
                     bg_opacity: bgOpacity,
-                    position: instantSelectedPosition,
-                    font_name: instantSelectedFont,
-                    quality: instantSelectedQuality,
+                    position: window.instantSelectedPosition || 'bottom',
+                    font_name: window.instantSelectedFont || 'Arial',
+                    quality: window.instantSelectedQuality || 'original',
                     vertical_offset: verticalOffset
                 });
                 

@@ -1250,12 +1250,19 @@ def api_instant_translate():
     """API للترجمة الفورية"""
     try:
         data = request.json
+        
+        if not data:
+            logger.error("No JSON data received")
+            return jsonify({'success': False, 'message': 'لم يتم استلام بيانات'}), 400
+        
         step = data.get('step')
         
         if not step:
+            logger.error(f"Missing step in request data: {data.keys()}")
             return jsonify({'success': False, 'message': 'خطوة غير محددة'}), 400
         
         logger.info(f"Processing step: {step}")
+        logger.debug(f"Request data keys: {data.keys()}")
         
         if step == 'download':
             url = data.get('url')
