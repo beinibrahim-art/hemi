@@ -977,10 +977,15 @@ class SubtitleProcessor:
         if not segments:
             return ""
         
+        def get_start(seg: Dict) -> float:
+            return float(seg.get('original_start', seg.get('start', 0)))
+
+        def get_end(seg: Dict, default_start: float) -> float:
+            return float(seg.get('original_end', seg.get('end', default_start + 3)))
+
         if strict:
-            segments_to_use = sorted(segments, key=lambda x: float(x.get('start', 0)))
+            segments_to_use = sorted(segments, key=get_start)
         else:
-            # تنظيف وترتيب segments
             segments_to_use = SubtitleProcessor.clean_and_merge_segments(segments)
         
         srt_lines = []
@@ -989,8 +994,8 @@ class SubtitleProcessor:
         index = 1
 
         for seg in segments_to_use:
-            start = float(seg.get('start', 0))
-            end = float(seg.get('end', start + 3))
+            start = get_start(seg)
+            end = get_end(seg, start)
             text = seg.get('text', '').strip()
             
             # التأكد من أن التوقيتات منطقية
@@ -999,9 +1004,9 @@ class SubtitleProcessor:
             
             if strict:
                 if start < prev_end:
-                    start = prev_end
+                    start = prev_end + 0.001
                 if end <= start:
-                    end = start + 0.3
+                    end = start + 0.05
             
             # التأكد من أن النص غير فارغ
             if not text:
