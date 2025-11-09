@@ -562,14 +562,23 @@ class WhisperTranscriber:
 
                 original_start = float(segment.get('start', 0.0))
                 original_end = float(segment.get('end', original_start + 0.1))
+                segment_duration = max(original_end - original_start, segment.get('duration', 0.0) or 0.0)
 
                 if original_start < prev_original_end:
                     original_start = prev_original_end + self._MIN_GAP_SECONDS
                 if original_end <= original_start:
-                    original_end = original_start + max(segment.get('duration', 0.3), 0.3)
+                    original_end = original_start + max(segment_duration, 0.3)
+                    segment_duration = max(original_end - original_start, 0.3)
 
                 display_start = max(0.0, original_start - self._PADDING_SECONDS)
-                display_end = original_end + self._PADDING_SECONDS
+                display_end = max(display_start + 0.1, original_end + self._PADDING_SECONDS)
+
+                if cleaned_segments:
+                    min_start = cleaned_segments[-1]['end'] + self._MIN_GAP_SECONDS
+                    if display_start < min_start:
+                        shift = min_start - display_start
+                        display_start += shift
+                        display_end = max(display_end + shift, display_start + max(segment_duration, 0.3))
 
                 words = self._filter_words_for_range(
                     segment.get('words', []),
