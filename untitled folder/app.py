@@ -2424,6 +2424,8 @@ def api_instant_translate():
             
             # استخدام yt-dlp مباشرة
             download_folder = Path(app.config['DOWNLOAD_FOLDER'])
+            download_folder.mkdir(parents=True, exist_ok=True)
+            download_started_at = time.time()
             
             # تحديد format command من quality
             if quality == 'best':
@@ -2442,7 +2444,7 @@ def api_instant_translate():
             # إعدادات yt-dlp مع تحويل إجباري إلى MP4 H.264 متوافق
             ydl_opts = {
                 'format': format_cmd,
-                'outtmpl': str(download_folder / '%(title)s.%(ext)s'),
+                'outtmpl': str(download_folder / '%(id)s_%(title)s.%(ext)s'),
                 'quiet': True,
                 'no_warnings': True,
                 'merge_output_format': 'mp4',
@@ -2462,25 +2464,38 @@ def api_instant_translate():
             }
             
             try:
+                filename = None
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=True)
-                    filename = ydl.prepare_filename(info)
+                    # محاولة الحصول على المسار الفعلي من معلومات التحميل
+                    requested_downloads = info.get('requested_downloads') or []
+                    for entry in requested_downloads:
+                        candidate = entry.get('filepath') or entry.get('_filename')
+                        if candidate and os.path.exists(candidate):
+                            filename = candidate
+                            break
+                    if not filename:
+                        candidate = info.get('filepath') or info.get('_filename')
+                        if candidate and os.path.exists(candidate):
+                            filename = candidate
+                    if not filename:
+                        filename = ydl.prepare_filename(info)
                 
                 # التأكد من أن الملف موجود
-                if not os.path.exists(filename):
-                    # البحث عن أحدث ملف
-                    video_files = []
+                if not filename or not os.path.exists(filename):
+                    # البحث عن أحدث ملف تم تعديله بعد بدء التحميل
+                    latest_file = None
+                    latest_mtime = 0
                     for file in download_folder.iterdir():
-                        if file.is_file():
-                            ext = file.suffix.lower()
-                            if ext in ['.mp4', '.webm', '.mkv', '.mov', '.avi', '.flv']:
-                                video_files.append((file, file.stat().st_mtime))
-                    
-                    if video_files:
-                        video_files.sort(key=lambda x: x[1], reverse=True)
-                        filename = str(video_files[0][0])
-                
-                if not os.path.exists(filename):
+                        if file.is_file() and file.suffix.lower() in ['.mp4', '.webm', '.mkv', '.mov', '.avi', '.flv']:
+                            mtime = file.stat().st_mtime
+                            if mtime >= download_started_at - 1 and mtime > latest_mtime:
+                                latest_file = file
+                                latest_mtime = mtime
+                    if latest_file:
+                        filename = str(latest_file)
+
+                if not filename or not os.path.exists(filename):
                     return jsonify({
                         'success': False,
                         'message': 'تم التحميل لكن الملف غير موجود'

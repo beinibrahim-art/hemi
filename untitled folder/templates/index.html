@@ -1833,6 +1833,15 @@
             if (engineLabelEl) engineLabelEl.textContent = '';
             window.instantEngineUsed = null;
             window.instantEngineLabel = null;
+            window.tempVideoFile = null;
+            window.tempAudioFile = null;
+            window.tempTranscriptFile = null;
+            window.tempTranslatedFile = null;
+            window.instantTranslatedText = '';
+            window.instantVideoFile = null;
+            window.transcriptSegments = [];
+            window.translatedSegments = [];
+            window.downloadId = null;
             
             const exportBtn = document.getElementById('instantExportBtn');
             if (exportBtn) exportBtn.remove();
