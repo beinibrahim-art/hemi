@@ -215,7 +215,7 @@ class WhisperTranscriber:
                 "beam_size": 10,
                 "best_of": 5,
                 "patience": 2.0,
-                "temperature": 0.0,
+                "temperatures": (0.0,),
             }
             model = whisperx.load_model(
                 model_size,
@@ -344,11 +344,7 @@ class WhisperTranscriber:
             word_timestamps=True,
             prepend_punctuations=punctuation_prepend,
             append_punctuations=punctuation_append,
-            vad_filter=True,
-            vad_parameters=dict(
-                min_silence_duration_ms=500,
-                speech_pad_ms=400,
-            ),
+            vad_filter=False,
             log_prob_threshold=-1.0,
             no_speech_threshold=0.6,
             compression_ratio_threshold=2.4,
