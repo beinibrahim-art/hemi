@@ -841,63 +841,83 @@ class SubtitleProcessor:
     @staticmethod
     def smart_split_translation(original_segments: List[Dict], translated_text: str) -> List[Dict]:
         """
-        تقسيم ذكي للترجمة مع الحفاظ على المزامنة
-        يقسم النص المترجم بناءً على segments الأصلية مع تحسين التوقيتات
+        توزيع النص المترجم على المقاطع الأصلية بحيث يحتفظ كل مقطع بزمنه، مع توزيع الكلمات بالتناسب.
         """
-        translated_segments = []
-        
-        # تقسيم النص المترجم بناءً على عدد segments الأصلية
-        orig_total_words = sum(len(seg.get('text', '').split()) for seg in original_segments)
-        trans_words = translated_text.split()
-        
-        if orig_total_words == 0 or len(trans_words) == 0:
+        translated_segments: List[Dict] = []
+        segments_count = len(original_segments)
+        if segments_count == 0:
             return translated_segments
-        
-        # حساب عدد الكلمات لكل segment
-        word_index = 0
-        for i, orig_seg in enumerate(original_segments):
-            orig_text = orig_seg.get('text', '').strip()
-            orig_start = float(orig_seg.get('start', 0))
-            orig_end = float(orig_seg.get('end', orig_start + 3))
-            orig_duration = orig_end - orig_start
-            
-            if not orig_text:
-                continue
-            
-            orig_word_count = len(orig_text.split())
-            
-            # حساب عدد الكلمات المترجمة المقابلة
-            # بناءً على نسبة الكلمات الإجمالية
-            if orig_total_words > 0:
-                segment_ratio = orig_word_count / orig_total_words
-                trans_word_count = max(1, int(len(trans_words) * segment_ratio))
-            else:
-                trans_word_count = orig_word_count
-            
-            # أخذ الكلمات المترجمة المقابلة
-            trans_segment_words = trans_words[word_index:word_index + trans_word_count]
-            trans_segment_text = ' '.join(trans_segment_words).strip()
-            
-            if trans_segment_text:
-                # تحسين التوقيت بناءً على طول النص المترجم
-                orig_char_count = len(orig_text)
-                trans_char_count = len(trans_segment_text)
-                
-                if orig_char_count > 0:
-                    char_ratio = trans_char_count / orig_char_count
-                    adjusted_duration = orig_duration * min(1.5, max(0.5, char_ratio))
-                    adjusted_end = orig_start + adjusted_duration
-                else:
-                    adjusted_end = orig_end
-                
+
+        trans_words = translated_text.split()
+        total_trans_words = len(trans_words)
+
+        if total_trans_words == 0:
+            for seg in original_segments:
                 translated_segments.append({
-                    'start': orig_start,
-                    'end': adjusted_end,
-                    'text': trans_segment_text
+                    'start': float(seg.get('start', 0.0)),
+                    'end': float(seg.get('end', float(seg.get('start', 0.0)) + 0.3)),
+                    'text': ''
                 })
-                
-                word_index += trans_word_count
-        
+            return translated_segments
+
+        orig_word_counts = [max(1, len(seg.get('text', '').split())) for seg in original_segments]
+        total_orig_words = sum(orig_word_counts)
+        if total_orig_words == 0:
+            orig_word_counts = [1] * segments_count
+            total_orig_words = segments_count
+
+        cumulative_ratio = 0.0
+        prev_boundary = 0
+        word_allocation: List[int] = []
+
+        if total_trans_words >= segments_count:
+            for count in orig_word_counts:
+                cumulative_ratio += count / total_orig_words
+                boundary = int(round(cumulative_ratio * total_trans_words))
+                words_for_segment = max(0, boundary - prev_boundary)
+                word_allocation.append(words_for_segment)
+                prev_boundary = boundary
+
+            diff = total_trans_words - sum(word_allocation)
+            if diff != 0 and word_allocation:
+                word_allocation[-1] += diff
+
+            for idx in range(segments_count):
+                if word_allocation[idx] == 0:
+                    donor = max(range(segments_count), key=lambda k: word_allocation[k])
+                    if word_allocation[donor] > 1:
+                        word_allocation[donor] -= 1
+                        word_allocation[idx] = 1
+                    else:
+                        word_allocation[idx] = 1
+        else:
+            word_allocation = [1 if idx < total_trans_words else 0 for idx in range(segments_count)]
+
+        word_index = 0
+        for idx, orig_seg in enumerate(original_segments):
+            start = float(orig_seg.get('start', 0.0))
+            end = float(orig_seg.get('end', start + 0.5))
+
+            words_for_segment = word_allocation[idx]
+            if words_for_segment <= 0 or word_index >= total_trans_words:
+                segment_text = ''
+            else:
+                segment_words = trans_words[word_index:word_index + words_for_segment]
+                segment_text = ' '.join(segment_words).strip()
+                word_index += words_for_segment
+
+            translated_segments.append({
+                'start': start,
+                'end': end,
+                'text': segment_text
+            })
+
+        if word_index < total_trans_words and translated_segments:
+            remainder = ' '.join(trans_words[word_index:]).strip()
+            translated_segments[-1]['text'] = (
+                (translated_segments[-1]['text'] + ' ' + remainder).strip()
+            )
+
         return translated_segments
     
     @staticmethod
