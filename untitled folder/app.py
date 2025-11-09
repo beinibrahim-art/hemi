@@ -547,6 +547,7 @@ class WhisperTranscriber:
 
         cleaned_segments: List[Dict] = []
         prev_original_end = 0.0
+        prev_display_end = 0.0
 
         for raw_segment in segments:
             split_segments = self._split_segment_by_readability(
@@ -570,15 +571,15 @@ class WhisperTranscriber:
                     original_end = original_start + max(segment_duration, 0.3)
                     segment_duration = max(original_end - original_start, 0.3)
 
-                display_start = max(0.0, original_start - self._PADDING_SECONDS)
+                display_start = original_start
                 display_end = max(display_start + 0.1, original_end + self._PADDING_SECONDS)
 
                 if cleaned_segments:
-                    min_start = cleaned_segments[-1]['end'] + self._MIN_GAP_SECONDS
+                    prev_segment = cleaned_segments[-1]
+                    min_start = prev_segment['end'] + self._MIN_GAP_SECONDS
                     if display_start < min_start:
-                        shift = min_start - display_start
-                        display_start += shift
-                        display_end = max(display_end + shift, display_start + max(segment_duration, 0.3))
+                        display_start = min_start
+                        display_end = max(display_start + max(segment_duration, 0.3), prev_segment['end'] + max(self._MIN_GAP_SECONDS, segment_duration / 2))
 
                 words = self._filter_words_for_range(
                     segment.get('words', []),
@@ -607,6 +608,7 @@ class WhisperTranscriber:
 
                 cleaned_segments.append(improved_segment)
                 prev_original_end = original_end
+                prev_display_end = improved_segment['end']
 
         return cleaned_segments
 
