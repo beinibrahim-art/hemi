@@ -39,6 +39,12 @@ except ImportError:
     FASTER_WHISPER_AVAILABLE = False
 
 try:
+    import whisperx
+    WHISPERX_AVAILABLE = True
+except ImportError:
+    WHISPERX_AVAILABLE = False
+
+try:
     from deep_translator import GoogleTranslator
     TRANSLATOR_AVAILABLE = True
 except ImportError:
@@ -152,12 +158,20 @@ class WhisperTranscriber:
 
     def __init__(self):
         self.model_cache = {}
+        self.whisperx_model_cache = {}
+        self.align_model_cache = {}
 
     def transcribe(self, audio_file: str, model_size: str = 'base',
                    language: str = 'auto') -> Dict:
         """تحويل الصوت إلى نص مع دعم Faster Whisper والإعدادات المحسّنة"""
 
         model_size = self._normalize_model_size(model_size)
+
+        if WHISPERX_AVAILABLE:
+            try:
+                return self._transcribe_whisperx(audio_file, model_size, language)
+            except Exception as e:
+                logger.warning(f"WhisperX failed: {e}, falling back to Faster Whisper")
 
         if FASTER_WHISPER_AVAILABLE:
             try:
@@ -192,6 +206,120 @@ class WhisperTranscriber:
             model = WhisperModel(model_size, device=device, compute_type=compute_type)
             self.model_cache[cache_key] = model
         return model
+
+    def _get_whisperx_model(self, model_size: str, device: str, compute_type: str):
+        cache_key = (model_size, device, compute_type)
+        model = self.whisperx_model_cache.get(cache_key)
+        if model is None:
+            asr_options = {
+                "beam_size": 10,
+                "best_of": 5,
+                "patience": 2.0,
+                "temperature": 0.0,
+            }
+            model = whisperx.load_model(
+                model_size,
+                device,
+                compute_type=compute_type,
+                asr_options=asr_options
+            )
+            self.whisperx_model_cache[cache_key] = model
+        return model
+
+    def _get_alignment_resources(self, language_code: str, device: str):
+        lang = language_code or 'en'
+        cache_key = (lang, device)
+        resources = self.align_model_cache.get(cache_key)
+        if resources is None:
+            align_model, metadata = whisperx.load_align_model(
+                language_code=lang,
+                device=device
+            )
+            resources = (align_model, metadata)
+            self.align_model_cache[cache_key] = resources
+        return resources
+
+    def _transcribe_whisperx(self, audio_file: str, model_size: str, language: str) -> Dict:
+        """استخدام WhisperX للحصول على مزامنة على مستوى الكلمات"""
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        compute_type = "float16" if device == "cuda" else "int8"
+
+        model = self._get_whisperx_model(model_size, device, compute_type)
+
+        language_code = None if language == 'auto' else language
+
+        result = model.transcribe(
+            audio_file,
+            language=language_code
+        )
+
+        segments_raw = result.get('segments', [])
+        if not segments_raw:
+            raise ValueError("WhisperX did not return any segments")
+
+        alignment_language = language_code or result.get('language') or 'en'
+        align_model, metadata = self._get_alignment_resources(alignment_language, device)
+
+        aligned = whisperx.align(
+            segments_raw,
+            align_model,
+            metadata,
+            audio_file,
+            device
+        )
+
+        aligned_segments = aligned.get('segments', segments_raw)
+
+        segments_list = []
+        full_text_parts = []
+
+        for segment in aligned_segments:
+            text = segment.get('text', '').strip()
+            if not text:
+                continue
+
+            start = float(segment.get('start', 0.0))
+            end = float(segment.get('end', start + 0.1))
+
+            words_info = []
+            for word in segment.get('words') or []:
+                word_text = word.get('word', '').strip()
+                if not word_text:
+                    continue
+                w_start = word.get('start', start)
+                w_end = word.get('end', w_start)
+                probability = word.get('confidence', word.get('probability', 0.0))
+                words_info.append({
+                    'word': word_text,
+                    'start': round(float(w_start), 3),
+                    'end': round(float(w_end), 3),
+                    'probability': round(float(probability), 3)
+                })
+
+            segment_info = {
+                'start': round(start, 3),
+                'end': round(end, 3),
+                'text': text,
+                'words': words_info,
+                'avg_logprob': segment.get('avg_logprob', 0.0),
+                'no_speech_prob': segment.get('no_speech_prob', 0.0),
+                'compression_ratio': segment.get('compression_ratio', 0.0),
+            }
+
+            segments_list.append(segment_info)
+            full_text_parts.append(text)
+
+        segments_list = self._post_process_segments(segments_list)
+
+        return {
+            'text': ' '.join(full_text_parts).strip(),
+            'language': result.get('language', alignment_language),
+            'language_probability': result.get('language_probability', 0.0),
+            'duration': result.get('duration', 0.0),
+            'segments': segments_list
+        }
 
     def _transcribe_faster(self, audio_file: str, model_size: str, language: str) -> Dict:
         """استخدام Faster Whisper مع إعدادات محسّنة للدقة القصوى"""
