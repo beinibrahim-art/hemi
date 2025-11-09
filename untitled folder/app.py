@@ -1073,6 +1073,12 @@ class SubtitleProcessor:
             if end <= start:
                 end = start + max(1.0, len(text) * 0.1)  # مدة بناءً على طول النص
             
+            # منع أي تداخل صريح
+            if start < last_end:
+                start = last_end + 0.05
+                if end <= start:
+                    end = start + 0.05
+            
             # إذا كان segment متداخل مع السابق، دمجهما
             if cleaned and start < last_end:
                 # دمج مع segment السابق
@@ -1112,7 +1118,7 @@ class SubtitleProcessor:
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         secs = seconds % 60
-        millisecs = int((secs % 1) * 1000)
+        millisecs = int(round((secs % 1) * 1000))
         secs = int(secs)
         
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{millisecs:03d}"
@@ -1258,7 +1264,7 @@ class AccurateSyncEngine:
     MAX_DURATION = 7.0
     CHARS_PER_SECOND_AR = 15
     CHARS_PER_SECOND_EN = 20
-    PADDING = 0.2
+    PADDING = 0.3
 
     @staticmethod
     def calculate_optimal_duration(text: str, is_arabic: bool = True) -> float:
@@ -1883,61 +1889,59 @@ class VideoProcessor:
 
                 return process.returncode == 0, process
 
-            primary_filter = VideoProcessor._build_filter_expression(
-                'subtitles' if is_srt else 'ass',
-                subtitle_path,
-                options={'charenc': 'UTF-8'} if is_srt else None
-            )
-            success, _ = execute_filter(primary_filter, subtitle_path)
+        primary_filter = VideoProcessor._build_filter_expression(
+            'subtitles' if is_srt else 'ass',
+            subtitle_path,
+            options={'charenc': 'UTF-8', 'force_style': 'WrapStyle=0'} if is_srt else None
+        )
+        success, _ = execute_filter(primary_filter, subtitle_path)
 
-            if success and output_path.exists():
-                file_size = output_path.stat().st_size
-                if file_size > 0:
-                    logger.info(f"Successfully merged subtitles. Output size: {file_size} bytes")
-                    return True
-                else:
-                    logger.error(f"Output file exists but is empty (0 bytes): {output_path}")
-                    success = False
-            elif success:
-                logger.error(f"FFmpeg reported success but output file not found: {output_path}")
+        if success and output_path.exists():
+            file_size = output_path.stat().st_size
+            if file_size > 0:
+                logger.info(f"Successfully merged subtitles. Output size: {file_size} bytes")
+                return True
+            else:
+                logger.error(f"Output file exists but is empty (0 bytes): {output_path}")
                 success = False
+        elif success:
+            logger.error(f"FFmpeg reported success but output file not found: {output_path}")
+            success = False
 
-            if not success and is_srt:
-                logger.info("Trying with ASS filter as fallback...")
-                try:
-                    srt_content = subtitle_path.read_text(encoding='utf-8', errors='ignore')
-                except Exception as read_err:
-                    logger.error(f"Failed to read SRT file for fallback: {read_err}")
-                    return False
-
-                ass_content = SubtitleProcessor.create_ass(srt_content, settings)
-                ass_path = subtitle_path.with_suffix('.ass')
-
-                try:
-                    ass_path.write_text(ass_content, encoding='utf-8-sig')
-                except Exception as write_err:
-                    logger.error(f"Failed to write ASS file: {write_err}")
-                    return False
-
-                fallback_filter = VideoProcessor._build_filter_expression('ass', ass_path)
-                success_alt, _ = execute_filter(fallback_filter, ass_path)
-
-                if success_alt and output_path.exists():
-                    file_size = output_path.stat().st_size
-                    if file_size > 0:
-                        logger.info(f"Successfully merged with ASS filter. Output size: {file_size} bytes")
-                        return True
-                    else:
-                        logger.error(f"ASS filter succeeded but output file empty: {output_path}")
-                        return False
-                else:
-                    logger.error("ASS filter fallback failed")
-                    return False
-
-            if not success:
-                logger.error("Subtitle merge failed and no fallback succeeded.")
+        if not success and is_srt:
+            logger.info("Trying with ASS filter as fallback...")
+            try:
+                srt_content = subtitle_path.read_text(encoding='utf-8', errors='ignore')
+            except Exception as read_err:
+                logger.error(f"Failed to read SRT file for fallback: {read_err}")
                 return False
 
+            ass_content = SubtitleProcessor.create_ass(srt_content, settings)
+            ass_path = subtitle_path.with_suffix('.ass')
+
+            try:
+                ass_path.write_text(ass_content, encoding='utf-8-sig')
+            except Exception as write_err:
+                logger.error(f"Failed to write ASS file: {write_err}")
+                return False
+
+            fallback_filter = VideoProcessor._build_filter_expression('ass', ass_path)
+            success_alt, _ = execute_filter(fallback_filter, ass_path)
+
+            if success_alt and output_path.exists():
+                file_size = output_path.stat().st_size
+                if file_size > 0:
+                    logger.info(f"Successfully merged with ASS filter. Output size: {file_size} bytes")
+                    return True
+                else:
+                    logger.error(f"ASS filter succeeded but output file empty: {output_path}")
+                    return False
+            else:
+                logger.error("ASS filter fallback failed")
+                return False
+
+        if not success:
+            logger.error("Subtitle merge failed and no fallback succeeded.")
             return False
 
         except Exception as e:
@@ -2956,21 +2960,32 @@ def api_instant_translate():
                 
                 logger.info("🎯 Using AccurateSyncEngine for perfect synchronization")
                 
-                synced_segments = AccurateSyncEngine.sync_translation_accurate(
+                translated_segments = SubtitleProcessor.smart_split_translation(
                     original_segments,
-                    translated_text,
-                    is_arabic=True
+                    translated_text
                 )
-                
-                if synced_segments:
-                    strict_segments = AccurateSyncEngine.force_strict_timing(synced_segments)
-                    subtitle_text = SubtitleProcessor.create_srt(strict_segments, strict=True)
-                    logger.info(f"✅ Perfect sync created: {len(strict_segments)} segments")
+
+                if translated_segments:
+                    improved_segments = SubtitleProcessor.improve_sync_with_words(
+                        original_segments,
+                        translated_segments
+                    )
                 else:
-                    logger.warning("⚠️ Sync failed, fallback to default handling")
+                    logger.warning("smart_split_translation returned empty segments, falling back to AccurateSyncEngine")
+                    improved_segments = AccurateSyncEngine.sync_translation_accurate(
+                        original_segments,
+                        translated_text,
+                        is_arabic=True
+                    )
+
+                cleaned_segments = SubtitleProcessor.clean_and_merge_segments(improved_segments)
+                strict_segments = AccurateSyncEngine.force_strict_timing(cleaned_segments)
+                subtitle_text = SubtitleProcessor.create_srt(strict_segments, strict=True)
+                logger.info(f"✅ Perfect sync created using word alignment: {len(strict_segments)} segments")
             elif translated_segments_data and translated_segments_data.get('translated_segments'):
                 segments = translated_segments_data['translated_segments']
-                strict_segments = AccurateSyncEngine.force_strict_timing(segments)
+                cleaned_segments = SubtitleProcessor.clean_and_merge_segments(segments)
+                strict_segments = AccurateSyncEngine.force_strict_timing(cleaned_segments)
                 subtitle_text = SubtitleProcessor.create_srt(strict_segments, strict=True)
                 logger.info(f"✅ Used provided translated segments: {len(strict_segments)} segments")
             
