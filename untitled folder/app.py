@@ -1889,12 +1889,32 @@ class VideoProcessor:
 
                 return process.returncode == 0, process
 
+            primary_sub_path = subtitle_path
+            primary_filter_name = 'ass'
+
+            if is_srt:
+                try:
+                    srt_content = subtitle_path.read_text(encoding='utf-8', errors='ignore')
+                except Exception as read_err:
+                    logger.error(f"Failed to read SRT file: {read_err}")
+                    return False
+
+                ass_content = SubtitleProcessor.create_ass(srt_content, settings)
+                primary_sub_path = subtitle_path.with_suffix('.ass')
+                try:
+                    primary_sub_path.write_text(ass_content, encoding='utf-8-sig')
+                except Exception as write_err:
+                    logger.error(f"Failed to write ASS file: {write_err}")
+                    return False
+            else:
+                primary_filter_name = 'ass' if subtitle_path.suffix.lower() == '.ass' else 'subtitles'
+
             primary_filter = VideoProcessor._build_filter_expression(
-                'subtitles' if is_srt else 'ass',
-                subtitle_path,
-                options={'charenc': 'UTF-8', 'force_style': "'WrapStyle=0'"} if is_srt else None
+                primary_filter_name,
+                primary_sub_path,
+                options={'charenc': 'UTF-8', 'force_style': "'WrapStyle=0'"} if primary_filter_name == 'subtitles' else None
             )
-            success, _ = execute_filter(primary_filter, subtitle_path)
+            success, _ = execute_filter(primary_filter, primary_sub_path)
 
             if success and output_path.exists():
                 file_size = output_path.stat().st_size
@@ -1909,24 +1929,9 @@ class VideoProcessor:
                 success = False
 
             if not success and is_srt:
-                logger.info("Trying with ASS filter as fallback...")
-                try:
-                    srt_content = subtitle_path.read_text(encoding='utf-8', errors='ignore')
-                except Exception as read_err:
-                    logger.error(f"Failed to read SRT file for fallback: {read_err}")
-                    return False
-
-                ass_content = SubtitleProcessor.create_ass(srt_content, settings)
-                ass_path = subtitle_path.with_suffix('.ass')
-
-                try:
-                    ass_path.write_text(ass_content, encoding='utf-8-sig')
-                except Exception as write_err:
-                    logger.error(f"Failed to write ASS file: {write_err}")
-                    return False
-
-                fallback_filter = VideoProcessor._build_filter_expression('ass', ass_path)
-                success_alt, _ = execute_filter(fallback_filter, ass_path)
+                logger.info("Retrying ASS filter after initial failure...")
+                fallback_filter = VideoProcessor._build_filter_expression('ass', primary_sub_path)
+                success_alt, _ = execute_filter(fallback_filter, primary_sub_path)
 
                 if success_alt and output_path.exists():
                     file_size = output_path.stat().st_size
@@ -2958,30 +2963,35 @@ def api_instant_translate():
                 original_segments = transcript_data['segments']
                 translated_text = subtitle_text.strip()
                 
-                logger.info("🎯 Using AccurateSyncEngine for perfect synchronization")
+                logger.info("🎯 Aligning translation with original segments")
                 
-                translated_segments = SubtitleProcessor.smart_split_translation(
-                    original_segments,
-                    translated_text
-                )
-
-                if translated_segments:
-                    improved_segments = SubtitleProcessor.improve_sync_with_words(
-                        original_segments,
-                        translated_segments
-                    )
+                translated_segments = []
+                if translated_segments_data and translated_segments_data.get('translated_segments'):
+                    translated_segments = translated_segments_data['translated_segments']
                 else:
-                    logger.warning("smart_split_translation returned empty segments, falling back to AccurateSyncEngine")
-                    improved_segments = AccurateSyncEngine.sync_translation_accurate(
+                    translated_segments = SubtitleProcessor.smart_split_translation(
                         original_segments,
-                        translated_text,
-                        is_arabic=True
+                        translated_text
                     )
 
-                cleaned_segments = SubtitleProcessor.clean_and_merge_segments(improved_segments)
+                aligned_segments = []
+                for index, orig_seg in enumerate(original_segments):
+                    start = float(orig_seg.get('start', 0.0))
+                    end = float(orig_seg.get('end', start + 0.5))
+                    text = ''
+                    if index < len(translated_segments):
+                        text = translated_segments[index].get('text', '').strip()
+                    
+                    aligned_segments.append({
+                        'start': start,
+                        'end': end,
+                        'text': text
+                    })
+
+                cleaned_segments = SubtitleProcessor.clean_and_merge_segments(aligned_segments)
                 strict_segments = AccurateSyncEngine.force_strict_timing(cleaned_segments)
                 subtitle_text = SubtitleProcessor.create_srt(strict_segments, strict=True)
-                logger.info(f"✅ Perfect sync created using word alignment: {len(strict_segments)} segments")
+                logger.info(f"✅ Perfect sync created using indexed alignment: {len(strict_segments)} segments")
             elif translated_segments_data and translated_segments_data.get('translated_segments'):
                 segments = translated_segments_data['translated_segments']
                 cleaned_segments = SubtitleProcessor.clean_and_merge_segments(segments)
