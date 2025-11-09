@@ -1248,6 +1248,184 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 # =============================================================================
+# محرك المزامنة الدقيق - Accurate Sync Engine
+# =============================================================================
+
+class AccurateSyncEngine:
+    """محرك مزامنة دقيق للترجمة"""
+
+    MIN_DURATION = 0.8
+    MAX_DURATION = 7.0
+    CHARS_PER_SECOND_AR = 15
+    CHARS_PER_SECOND_EN = 20
+    PADDING = 0.2
+
+    @staticmethod
+    def calculate_optimal_duration(text: str, is_arabic: bool = True) -> float:
+        chars_per_sec = AccurateSyncEngine.CHARS_PER_SECOND_AR if is_arabic else AccurateSyncEngine.CHARS_PER_SECOND_EN
+        char_count = len(text.strip())
+        calculated_duration = char_count / chars_per_sec if chars_per_sec else 0.0
+        duration = max(AccurateSyncEngine.MIN_DURATION, calculated_duration)
+        duration = min(AccurateSyncEngine.MAX_DURATION, duration)
+        return duration
+
+    @staticmethod
+    def _split_into_sentences(text: str, is_arabic: bool = True) -> List[str]:
+        if not text:
+            return []
+
+        pattern = r'[.!?؟،؛]+' if is_arabic else r'[.!?;]+'
+        sentences = re.split(pattern, text)
+        sentences = [s.strip() for s in sentences if s and s.strip()]
+
+        if sentences:
+            return sentences
+
+        words = text.split()
+        sentences = []
+        current: List[str] = []
+        for word in words:
+            current.append(word)
+            if len(' '.join(current)) >= 60:
+                sentences.append(' '.join(current))
+                current = []
+
+        if current:
+            sentences.append(' '.join(current))
+
+        return sentences
+
+    @staticmethod
+    def sync_translation_accurate(
+        original_segments: List[Dict],
+        translated_text: str,
+        is_arabic: bool = True
+    ) -> List[Dict]:
+        if not original_segments or not translated_text:
+            return []
+
+        sentences = AccurateSyncEngine._split_into_sentences(translated_text, is_arabic)
+        if not sentences:
+            return []
+
+        sentence_ratio = len(sentences) / len(original_segments)
+        synced_segments: List[Dict] = []
+        sentence_index = 0
+
+        for seg_idx, orig_seg in enumerate(original_segments):
+            if sentence_index >= len(sentences):
+                break
+
+            orig_start = float(orig_seg.get('start', 0))
+            orig_end = float(orig_seg.get('end', orig_start + 3))
+            orig_duration = max(orig_end - orig_start, 0.1)
+
+            sentences_for_segment = max(1, int(sentence_ratio + 0.5))
+
+            segment_sentences: List[str] = []
+            for _ in range(sentences_for_segment):
+                if sentence_index < len(sentences):
+                    segment_sentences.append(sentences[sentence_index])
+                    sentence_index += 1
+
+            if not segment_sentences:
+                continue
+
+            segment_text = ' '.join(segment_sentences)
+            ideal_duration = AccurateSyncEngine.calculate_optimal_duration(segment_text, is_arabic)
+            duration_ratio = ideal_duration / orig_duration if orig_duration else 1.0
+
+            if duration_ratio > 1.3:
+                adjusted_duration = orig_duration * min(duration_ratio, 1.5)
+            elif duration_ratio < 0.7:
+                adjusted_duration = orig_duration * max(duration_ratio, 0.8)
+            else:
+                adjusted_duration = orig_duration
+
+            adjusted_duration = max(AccurateSyncEngine.MIN_DURATION, adjusted_duration)
+            adjusted_duration = min(AccurateSyncEngine.MAX_DURATION, adjusted_duration)
+
+            end_time = orig_start + adjusted_duration
+
+            if seg_idx < len(original_segments) - 1:
+                next_start = float(original_segments[seg_idx + 1].get('start', end_time + 10))
+                if end_time > next_start - AccurateSyncEngine.PADDING:
+                    end_time = max(next_start - AccurateSyncEngine.PADDING, orig_start + AccurateSyncEngine.MIN_DURATION)
+
+            synced_segments.append({
+                'start': round(orig_start, 3),
+                'end': round(end_time, 3),
+                'text': segment_text.strip(),
+                'original_start': orig_start,
+                'original_end': orig_end,
+                'duration': round(end_time - orig_start, 3)
+            })
+
+        if sentence_index < len(sentences):
+            remaining_text = ' '.join(sentences[sentence_index:])
+            if remaining_text.strip():
+                last_end = synced_segments[-1]['end'] if synced_segments else 0.0
+                duration = AccurateSyncEngine.calculate_optimal_duration(remaining_text, is_arabic)
+                start = last_end + AccurateSyncEngine.PADDING
+                synced_segments.append({
+                    'start': round(start, 3),
+                    'end': round(start + duration, 3),
+                    'text': remaining_text.strip(),
+                    'duration': round(duration, 3)
+                })
+
+        logger.info(
+            f"AccurateSyncEngine: original_segments={len(original_segments)}, "
+            f"sentences={len(sentences)}, synced={len(synced_segments)}"
+        )
+
+        return synced_segments
+
+    @staticmethod
+    def force_strict_timing(segments: List[Dict]) -> List[Dict]:
+        if not segments:
+            return []
+
+        strict_segments: List[Dict] = []
+        prev_end = 0.0
+
+        for seg in segments:
+            start = float(seg.get('start', prev_end))
+            end = float(seg.get('end', start + 3))
+            text = seg.get('text', '').strip()
+
+            if not text:
+                continue
+
+            if start < prev_end + AccurateSyncEngine.PADDING:
+                start = prev_end + AccurateSyncEngine.PADDING
+
+            if end - start < AccurateSyncEngine.MIN_DURATION:
+                end = start + AccurateSyncEngine.MIN_DURATION
+
+            strict_segments.append({
+                'start': round(start, 3),
+                'end': round(end, 3),
+                'text': text,
+                'duration': round(end - start, 3)
+            })
+
+            prev_end = end
+
+        return strict_segments
+
+
+def fix_subtitle_sync(original_segments: List[Dict], translated_text: str) -> str:
+    synced_segments = AccurateSyncEngine.sync_translation_accurate(
+        original_segments,
+        translated_text,
+        is_arabic=True
+    )
+    strict_segments = AccurateSyncEngine.force_strict_timing(synced_segments)
+    return SubtitleProcessor.create_srt(strict_segments, strict=True)
+
+
+# =============================================================================
 # محسّن معالجة الفيديو
 # =============================================================================
 
@@ -2723,63 +2901,78 @@ def api_instant_translate():
             logger.info(f"Merge step called with data keys: {list(data.keys())}")
             
             video_file = data.get('video_file')
-            # دعم كلا الاسمين: subtitle_text و translated_text
             subtitle_text = data.get('subtitle_text') or data.get('translated_text')
             
-            logger.info(f"Initial values: video_file={bool(video_file)}, subtitle_text={bool(subtitle_text)}")
-            
-            # قراءة من الملف المؤقت إذا لزم الأمر
             if not video_file and data.get('temp_video_file'):
                 temp_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_video_file']
-                logger.info(f"Trying to read video from temp file: {temp_path}")
                 if temp_path.exists():
                     with open(temp_path, 'r') as f:
                         video_file = f.read().strip()
-                        logger.info(f"Read video_file from temp: {video_file}")
-                else:
-                    logger.warning(f"Temp video file not found: {temp_path}")
             
             if not subtitle_text and data.get('temp_translated_file'):
                 temp_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_translated_file']
-                logger.info(f"Trying to read subtitle from temp file: {temp_path}")
                 if temp_path.exists():
                     try:
-                        # محاولة قراءة كـ JSON أولاً
                         if temp_path.suffix == '.json':
                             with open(temp_path, 'r', encoding='utf-8') as f:
                                 temp_data = json.load(f)
-                                # محاولة الحصول على النص المترجم
                                 subtitle_text = temp_data.get('translated_text') or temp_data.get('text', '')
-                                if not subtitle_text and temp_data.get('translated_segments'):
-                                    # بناء النص من segments
-                                    subtitle_text = ' '.join([s.get('text', '') for s in temp_data['translated_segments']])
-                                logger.info(f"Read subtitle_text from JSON temp, length: {len(subtitle_text)}")
                         else:
-                            # قراءة كـ نص عادي
                             with open(temp_path, 'r', encoding='utf-8') as f:
                                 subtitle_text = f.read().strip()
-                                logger.info(f"Read subtitle_text from temp, length: {len(subtitle_text)}")
                     except Exception as e:
-                        logger.error(f"Error reading temp translated file: {e}")
-                        subtitle_text = None
-                else:
-                    logger.warning(f"Temp translated file not found: {temp_path}")
+                        logger.error(f"Error reading temp file: {e}")
             
             if not video_file or not subtitle_text:
-                logger.error(f"Merge error: video_file={video_file}, subtitle_text={'exists' if subtitle_text else 'missing'}")
-                logger.error(f"Data received: {json.dumps({k: str(v)[:100] if isinstance(v, str) else v for k, v in data.items()}, ensure_ascii=False)}")
                 return jsonify({
                     'success': False,
-                    'message': 'ملف الفيديو أو النص غير موجود',
-                    'debug': {
-                        'has_video_file': bool(video_file),
-                        'has_subtitle_text': bool(subtitle_text),
-                        'video_file': video_file if video_file else None,
-                        'received_keys': list(data.keys()),
-                        'temp_video_file': data.get('temp_video_file'),
-                        'temp_translated_file': data.get('temp_translated_file')
-                    }
+                    'message': 'ملف الفيديو أو النص غير موجود'
                 }), 400
+            
+            transcript_data = None
+            translated_segments_data = None
+            
+            if data.get('temp_transcript_file'):
+                temp_transcript_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_transcript_file']
+                if temp_transcript_path.exists():
+                    try:
+                        with open(temp_transcript_path, 'r', encoding='utf-8') as f:
+                            transcript_data = json.load(f)
+                    except Exception as e:
+                        logger.warning(f"Failed to load transcript data: {e}")
+            
+            if data.get('temp_translated_file'):
+                temp_translated_path = Path(app.config['DOWNLOAD_FOLDER']) / data['temp_translated_file']
+                if temp_translated_path.exists() and temp_translated_path.suffix == '.json':
+                    try:
+                        with open(temp_translated_path, 'r', encoding='utf-8') as f:
+                            translated_segments_data = json.load(f)
+                    except Exception as e:
+                        logger.warning(f"Failed to load translated segments: {e}")
+            
+            if transcript_data and transcript_data.get('segments'):
+                original_segments = transcript_data['segments']
+                translated_text = subtitle_text.strip()
+                
+                logger.info("🎯 Using AccurateSyncEngine for perfect synchronization")
+                
+                synced_segments = AccurateSyncEngine.sync_translation_accurate(
+                    original_segments,
+                    translated_text,
+                    is_arabic=True
+                )
+                
+                if synced_segments:
+                    strict_segments = AccurateSyncEngine.force_strict_timing(synced_segments)
+                    subtitle_text = SubtitleProcessor.create_srt(strict_segments, strict=True)
+                    logger.info(f"✅ Perfect sync created: {len(strict_segments)} segments")
+                else:
+                    logger.warning("⚠️ Sync failed, fallback to default handling")
+            elif translated_segments_data and translated_segments_data.get('translated_segments'):
+                segments = translated_segments_data['translated_segments']
+                strict_segments = AccurateSyncEngine.force_strict_timing(segments)
+                subtitle_text = SubtitleProcessor.create_srt(strict_segments, strict=True)
+                logger.info(f"✅ Used provided translated segments: {len(strict_segments)} segments")
             
             # التأكد من أن ملف الفيديو موجود
             if not os.path.exists(video_file):
