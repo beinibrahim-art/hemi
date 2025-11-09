@@ -1889,60 +1889,60 @@ class VideoProcessor:
 
                 return process.returncode == 0, process
 
-        primary_filter = VideoProcessor._build_filter_expression(
-            'subtitles' if is_srt else 'ass',
-            subtitle_path,
-            options={'charenc': 'UTF-8', 'force_style': 'WrapStyle=0'} if is_srt else None
-        )
-        success, _ = execute_filter(primary_filter, subtitle_path)
+            primary_filter = VideoProcessor._build_filter_expression(
+                'subtitles' if is_srt else 'ass',
+                subtitle_path,
+                options={'charenc': 'UTF-8', 'force_style': 'WrapStyle=0'} if is_srt else None
+            )
+            success, _ = execute_filter(primary_filter, subtitle_path)
 
-        if success and output_path.exists():
-            file_size = output_path.stat().st_size
-            if file_size > 0:
-                logger.info(f"Successfully merged subtitles. Output size: {file_size} bytes")
-                return True
-            else:
-                logger.error(f"Output file exists but is empty (0 bytes): {output_path}")
-                success = False
-        elif success:
-            logger.error(f"FFmpeg reported success but output file not found: {output_path}")
-            success = False
-
-        if not success and is_srt:
-            logger.info("Trying with ASS filter as fallback...")
-            try:
-                srt_content = subtitle_path.read_text(encoding='utf-8', errors='ignore')
-            except Exception as read_err:
-                logger.error(f"Failed to read SRT file for fallback: {read_err}")
-                return False
-
-            ass_content = SubtitleProcessor.create_ass(srt_content, settings)
-            ass_path = subtitle_path.with_suffix('.ass')
-
-            try:
-                ass_path.write_text(ass_content, encoding='utf-8-sig')
-            except Exception as write_err:
-                logger.error(f"Failed to write ASS file: {write_err}")
-                return False
-
-            fallback_filter = VideoProcessor._build_filter_expression('ass', ass_path)
-            success_alt, _ = execute_filter(fallback_filter, ass_path)
-
-            if success_alt and output_path.exists():
+            if success and output_path.exists():
                 file_size = output_path.stat().st_size
                 if file_size > 0:
-                    logger.info(f"Successfully merged with ASS filter. Output size: {file_size} bytes")
+                    logger.info(f"Successfully merged subtitles. Output size: {file_size} bytes")
                     return True
                 else:
-                    logger.error(f"ASS filter succeeded but output file empty: {output_path}")
-                    return False
-            else:
-                logger.error("ASS filter fallback failed")
-                return False
+                    logger.error(f"Output file exists but is empty (0 bytes): {output_path}")
+                    success = False
+            elif success:
+                logger.error(f"FFmpeg reported success but output file not found: {output_path}")
+                success = False
 
-        if not success:
-            logger.error("Subtitle merge failed and no fallback succeeded.")
-            return False
+            if not success and is_srt:
+                logger.info("Trying with ASS filter as fallback...")
+                try:
+                    srt_content = subtitle_path.read_text(encoding='utf-8', errors='ignore')
+                except Exception as read_err:
+                    logger.error(f"Failed to read SRT file for fallback: {read_err}")
+                    return False
+
+                ass_content = SubtitleProcessor.create_ass(srt_content, settings)
+                ass_path = subtitle_path.with_suffix('.ass')
+
+                try:
+                    ass_path.write_text(ass_content, encoding='utf-8-sig')
+                except Exception as write_err:
+                    logger.error(f"Failed to write ASS file: {write_err}")
+                    return False
+
+                fallback_filter = VideoProcessor._build_filter_expression('ass', ass_path)
+                success_alt, _ = execute_filter(fallback_filter, ass_path)
+
+                if success_alt and output_path.exists():
+                    file_size = output_path.stat().st_size
+                    if file_size > 0:
+                        logger.info(f"Successfully merged with ASS filter. Output size: {file_size} bytes")
+                        return True
+                    else:
+                        logger.error(f"ASS filter succeeded but output file empty: {output_path}")
+                        return False
+                else:
+                    logger.error("ASS filter fallback failed")
+                    return False
+
+            if not success:
+                logger.error("Subtitle merge failed and no fallback succeeded.")
+                return False
 
         except Exception as e:
             logger.error(f"Subtitle merge failed: {e}")
