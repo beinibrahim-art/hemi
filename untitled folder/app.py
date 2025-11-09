@@ -547,7 +547,6 @@ class WhisperTranscriber:
 
         cleaned_segments: List[Dict] = []
         prev_original_end = 0.0
-        prev_display_end = 0.0
 
         for raw_segment in segments:
             split_segments = self._split_segment_by_readability(
@@ -572,14 +571,17 @@ class WhisperTranscriber:
                     segment_duration = max(original_end - original_start, 0.3)
 
                 display_start = original_start
-                display_end = max(display_start + 0.1, original_end + self._PADDING_SECONDS)
-
                 if cleaned_segments:
-                    prev_segment = cleaned_segments[-1]
-                    min_start = prev_segment['end'] + self._MIN_GAP_SECONDS
+                    min_start = cleaned_segments[-1]['end'] + self._MIN_GAP_SECONDS
                     if display_start < min_start:
                         display_start = min_start
-                        display_end = max(display_start + max(segment_duration, 0.3), prev_segment['end'] + max(self._MIN_GAP_SECONDS, segment_duration / 2))
+
+                display_end = original_end
+                if display_end <= display_start:
+                    display_end = display_start + max(segment_duration, 0.3)
+
+                # إضافة padding بسيط للقراءة دون التسبب بتداخل
+                display_end = max(display_end, display_start + min(max(segment_duration, 0.3) + self._PADDING_SECONDS, segment_duration + 0.5))
 
                 words = self._filter_words_for_range(
                     segment.get('words', []),
@@ -608,7 +610,6 @@ class WhisperTranscriber:
 
                 cleaned_segments.append(improved_segment)
                 prev_original_end = original_end
-                prev_display_end = improved_segment['end']
 
         return cleaned_segments
 
@@ -971,17 +972,23 @@ class SubtitleProcessor:
         return split_segments
     
     @staticmethod
-    def create_srt(segments: List[Dict]) -> str:
-        """إنشاء ملف SRT من segments مع تنظيف وترتيب ودعم كامل للعربية"""
+    def create_srt(segments: List[Dict], strict: bool = False) -> str:
+        """إنشاء ملف SRT من segments مع خيارات للتعامل الصارم مع التوقيت"""
         if not segments:
             return ""
         
-        # تنظيف وترتيب segments
-        cleaned_segments = SubtitleProcessor.clean_and_merge_segments(segments)
+        if strict:
+            segments_to_use = sorted(segments, key=lambda x: float(x.get('start', 0)))
+        else:
+            # تنظيف وترتيب segments
+            segments_to_use = SubtitleProcessor.clean_and_merge_segments(segments)
         
         srt_lines = []
-        
-        for i, seg in enumerate(cleaned_segments, 1):
+
+        prev_end = 0.0
+        index = 1
+
+        for seg in segments_to_use:
             start = float(seg.get('start', 0))
             end = float(seg.get('end', start + 3))
             text = seg.get('text', '').strip()
@@ -990,6 +997,12 @@ class SubtitleProcessor:
             if end <= start:
                 end = start + 1.0  # مدة دنيا ثانية واحدة
             
+            if strict:
+                if start < prev_end:
+                    start = prev_end
+                if end <= start:
+                    end = start + 0.3
+            
             # التأكد من أن النص غير فارغ
             if not text:
                 continue
@@ -997,10 +1010,12 @@ class SubtitleProcessor:
             start_str = SubtitleProcessor._format_time(start)
             end_str = SubtitleProcessor._format_time(end)
             
-            srt_lines.append(f"{i}")
+            srt_lines.append(f"{index}")
             srt_lines.append(f"{start_str} --> {end_str}")
             srt_lines.append(text)
             srt_lines.append("")
+            prev_end = end
+            index += 1
         
         # إرجاع SRT مع دعم UTF-8
         return '\n'.join(srt_lines)
@@ -2845,7 +2860,7 @@ def api_instant_translate():
                     
                     # إنشاء SRT من segments المنظفة
                     if cleaned_segments:
-                        subtitle_text = SubtitleProcessor.create_srt(cleaned_segments)
+                        subtitle_text = SubtitleProcessor.create_srt(cleaned_segments, strict=True)
                     else:
                         subtitle_text = ""
                 
@@ -2866,7 +2881,7 @@ def api_instant_translate():
                         
                         # إنشاء SRT من segments المنظفة
                         if cleaned_segments:
-                            subtitle_text = SubtitleProcessor.create_srt(cleaned_segments)
+                            subtitle_text = SubtitleProcessor.create_srt(cleaned_segments, strict=True)
                         else:
                             subtitle_text = ""
                     else:
@@ -3396,7 +3411,7 @@ def api_translate():
             
             # إنشاء ملف SRT مترجم
             cleaned_segments = SubtitleProcessor.clean_and_merge_segments(translated_segments)
-            translated_srt_content = SubtitleProcessor.create_srt(cleaned_segments)
+            translated_srt_content = SubtitleProcessor.create_srt(cleaned_segments, strict=True)
             
             if translated_srt_content:
                 srt_filename = f"translated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.srt"
