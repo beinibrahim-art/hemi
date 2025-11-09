@@ -180,28 +180,79 @@ class WhisperTranscriber:
         self.whisperx_cache_dir.mkdir(parents=True, exist_ok=True)
         self.align_cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def transcribe(self, audio_file: str, model_size: str = 'base',
-                   language: str = 'auto') -> Dict:
-        """تحويل الصوت إلى نص مع دعم Faster Whisper والإعدادات المحسّنة"""
+    def transcribe(
+        self,
+        audio_file: str,
+        model_size: str = 'base',
+        language: str = 'auto',
+        engine: str = 'auto'
+    ) -> Dict:
+        """تحويل الصوت إلى نص مع دعم اختيار المحرك"""
 
         model_size = self._normalize_model_size(model_size)
+        engine_normalized = (engine or 'auto').strip().lower()
+        engine_map = {
+            'auto': 'auto',
+            'default': 'auto',
+            'automatic': 'auto',
+            'openai': 'whisper',
+            'original': 'whisper',
+            'native': 'whisper',
+            'whisper': 'whisper',
+            'whisper-openai': 'whisper',
+            'whisperx': 'whisperx',
+            'whisper-x': 'whisperx',
+            'alignment': 'whisperx',
+            'faster': 'faster',
+            'faster-whisper': 'faster',
+            'faster_whisper': 'faster'
+        }
+        engine_mode = engine_map.get(engine_normalized, engine_normalized)
+
+        def _attach_engine(result: Dict, used_engine: str) -> Dict:
+            if isinstance(result, dict):
+                result.setdefault('engine', used_engine)
+            return result
+
+        if engine_mode == 'whisper':
+            if not WHISPER_AVAILABLE:
+                raise RuntimeError("مكتبة Whisper الأصلية غير متوفرة (pip install whisper)")
+            return _attach_engine(self._transcribe_standard(audio_file, model_size, language), 'whisper')
+
+        if engine_mode == 'whisperx':
+            if not WHISPERX_AVAILABLE:
+                raise RuntimeError("WhisperX غير مثبت (pip install whisperx)")
+            return _attach_engine(self._transcribe_whisperx(audio_file, model_size, language), 'whisperx')
+
+        if engine_mode == 'faster':
+            if not FASTER_WHISPER_AVAILABLE:
+                raise RuntimeError("Faster-Whisper غير مثبت (pip install faster-whisper)")
+            return _attach_engine(self._transcribe_faster(audio_file, model_size, language), 'faster')
+
+        # الوضع التلقائي: نحاول WhisperX ثم Faster Whisper ثم Whisper الأصلي
+        last_error_messages: List[str] = []
 
         if WHISPERX_AVAILABLE:
             try:
-                return self._transcribe_whisperx(audio_file, model_size, language)
+                return _attach_engine(self._transcribe_whisperx(audio_file, model_size, language), 'whisperx')
             except Exception as e:
-                logger.warning(f"WhisperX failed: {e}, falling back to Faster Whisper")
+                message = f"WhisperX failed: {e}"
+                logger.warning(message)
+                last_error_messages.append(message)
 
         if FASTER_WHISPER_AVAILABLE:
             try:
-                return self._transcribe_faster(audio_file, model_size, language)
+                return _attach_engine(self._transcribe_faster(audio_file, model_size, language), 'faster')
             except Exception as e:
-                logger.warning(f"Faster Whisper failed: {e}, falling back to standard")
+                message = f"Faster Whisper failed: {e}"
+                logger.warning(message)
+                last_error_messages.append(message)
 
         if WHISPER_AVAILABLE:
-            return self._transcribe_standard(audio_file, model_size, language)
+            return _attach_engine(self._transcribe_standard(audio_file, model_size, language), 'whisper')
 
-        raise Exception("لا توجد مكتبة متاحة لتحويل الصوت إلى نص")
+        error_detail = "; ".join(last_error_messages) if last_error_messages else "No engines available"
+        raise Exception(f"لا توجد مكتبة متاحة لتحويل الصوت إلى نص ({error_detail})")
 
     def _normalize_model_size(self, model_size: str) -> str:
         if not model_size:
@@ -2500,6 +2551,7 @@ def api_instant_translate():
             audio_file = data.get('audio_file')
             model = data.get('model', 'base')
             language = data.get('language', 'auto')
+            engine = data.get('engine', 'auto')
             
             # قراءة من الملف المؤقت إذا لزم الأمر
             if not audio_file and data.get('temp_audio_file'):
@@ -2515,7 +2567,7 @@ def api_instant_translate():
                 }), 400
             
             try:
-                result = whisper_transcriber.transcribe(audio_file, model, language)
+                result = whisper_transcriber.transcribe(audio_file, model, language, engine=engine)
             except Exception as e:
                 logger.error(f"Transcription failed: {e}")
                 logger.error(traceback.format_exc())
@@ -3070,8 +3122,9 @@ def api_transcribe():
         # التحويل إلى نص
         model = request.form.get('model', 'base')
         language = request.form.get('language', 'auto')
+        engine = request.form.get('engine', 'auto')
         
-        result = whisper_transcriber.transcribe(audio_file, model, language)
+        result = whisper_transcriber.transcribe(audio_file, model, language, engine=engine)
         
         # إنشاء ملف SRT من segments
         srt_file = None
@@ -3118,6 +3171,7 @@ def api_transcribe_from_url():
         quality = data.get('quality', '720p')
         model = data.get('model', 'base')
         language = data.get('language', 'auto')
+        engine = data.get('engine', 'auto')
         
         if not url:
             return jsonify({'success': False, 'message': 'الرجاء إدخال رابط'}), 400
@@ -3192,7 +3246,7 @@ def api_transcribe_from_url():
             return jsonify({'success': False, 'message': 'فشل استخراج الصوت'}), 500
         
         # التحويل إلى نص
-        result = whisper_transcriber.transcribe(audio_file, model, language)
+        result = whisper_transcriber.transcribe(audio_file, model, language, engine=engine)
         
         # إنشاء ملف SRT من segments
         srt_file = None

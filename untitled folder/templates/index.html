@@ -426,7 +426,7 @@
                         </div>
 
                         <!-- Quick Settings -->
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                             <div>
                                 <label class="block text-sm font-semibold mb-2">جودة الفيديو:</label>
                                 <select id="instantVideoQuality" class="input-glass w-full px-4 py-2 rounded-xl">
@@ -453,6 +453,15 @@
                                     <option value="en">English</option>
                                     <option value="es">Español</option>
                                     <option value="fr">Français</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-semibold mb-2">محرك التحويل:</label>
+                                <select id="instantWhisperEngine" class="input-glass w-full px-4 py-2 rounded-xl">
+                                    <option value="auto" selected>تلقائي (WhisperX ثم البدائل)</option>
+                                    <option value="whisper">Whisper الأصلي (أعلى دقة)</option>
+                                    <option value="whisperx">WhisperX (محاذاة الكلمات)</option>
+                                    <option value="faster">Faster-Whisper (أسرع)</option>
                                 </select>
                             </div>
                         </div>
@@ -639,6 +648,9 @@
                                 <button class="btn-glass px-6 py-3 rounded-xl font-semibold" onclick="resetInstant()">
                                     <i class="bi bi-arrow-clockwise"></i> ترجمة فيديو آخر
                                 </button>
+                            </div>
+                            <div id="instantEngineInfo" class="hidden mt-3 text-sm text-blue-300">
+                                <i class="bi bi-cpu"></i> المحرك المستخدم: <span id="instantEngineLabel" class="font-semibold"></span>
                             </div>
                             <div id="instantTranscript" class="hidden mt-4">
                                 <label class="block text-sm font-semibold mb-2">النص المترجم:</label>
@@ -935,7 +947,7 @@
                     </div>
 
                     <!-- Settings -->
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                         <div>
                             <label class="block text-sm font-semibold mb-2">نموذج Whisper:</label>
                             <select id="whisperModel" class="input-glass w-full px-4 py-2 rounded-xl">
@@ -955,6 +967,15 @@
                                 <option value="ar">العربية</option>
                                 <option value="es">Español</option>
                                 <option value="fr">Français</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold mb-2">محرك التحويل:</label>
+                            <select id="transcribeEngine" class="input-glass w-full px-4 py-2 rounded-xl">
+                                <option value="auto" selected>تلقائي (WhisperX ثم البدائل)</option>
+                                <option value="whisper">Whisper الأصلي (أعلى دقة)</option>
+                                <option value="whisperx">WhisperX (محاذاة الكلمات)</option>
+                                <option value="faster">Faster-Whisper (أسرع)</option>
                             </select>
                         </div>
                     </div>
@@ -1135,6 +1156,14 @@
         window.instantSelectedQuality = 'original';
         let instantVideoDimensions = { width: 1920, height: 1080 };
         let instantVerticalOffset = 0;
+        const ENGINE_LABELS = {
+            'auto': 'تلقائي (WhisperX ثم البدائل)',
+            'whisperx': 'WhisperX (محاذاة الكلمات)',
+            'whisper': 'Whisper الأصلي (أعلى دقة)',
+            'faster': 'Faster-Whisper (أسرع)'
+        };
+        window.instantEngineUsed = null;
+        window.instantEngineLabel = null;
         
         // Theme Management - يجب أن تكون في النطاق العام
         window.toggleTheme = function() {
@@ -1649,7 +1678,8 @@
                     temp_audio_file: window.tempAudioFile,
                     step: 'transcribe',
                     model: document.getElementById('instantWhisperModel')?.value || 'base',
-                    language: document.getElementById('instantSourceLang')?.value || 'auto'
+                    language: document.getElementById('instantSourceLang')?.value || 'auto',
+                    engine: document.getElementById('instantWhisperEngine')?.value || 'auto'
                 });
 
                 if (!transcribeResponse.data.success) {
@@ -1658,6 +1688,9 @@
 
                 window.tempTranscriptFile = transcribeResponse.data.temp_file;
                 window.transcriptSegments = transcribeResponse.data.segments || [];
+                const engineUsed = transcribeResponse.data.engine || (document.getElementById('instantWhisperEngine')?.value || 'auto');
+                window.instantEngineUsed = engineUsed;
+                window.instantEngineLabel = ENGINE_LABELS[engineUsed] || engineUsed || 'غير محدد';
                 updateInstantProgress(60, 'جاري الترجمة...');
 
                 // إرسال segments مع التوقيتات للترجمة الوقتية
@@ -1794,6 +1827,12 @@
             document.getElementById('instantResult').classList.add('hidden');
             document.getElementById('instantSubtitleSettings').classList.add('hidden');
             document.getElementById('instantTranscript').classList.add('hidden');
+            const engineInfo = document.getElementById('instantEngineInfo');
+            if (engineInfo) engineInfo.classList.add('hidden');
+            const engineLabelEl = document.getElementById('instantEngineLabel');
+            if (engineLabelEl) engineLabelEl.textContent = '';
+            window.instantEngineUsed = null;
+            window.instantEngineLabel = null;
             
             const exportBtn = document.getElementById('instantExportBtn');
             if (exportBtn) exportBtn.remove();
@@ -1948,6 +1987,18 @@
                 
                 if (response.data.success) {
                     updateInstantProgress(100, 'اكتمل!');
+                    const engineInfo = document.getElementById('instantEngineInfo');
+                    const engineLabelEl = document.getElementById('instantEngineLabel');
+                    if (engineInfo && engineLabelEl) {
+                        const label = window.instantEngineLabel || (ENGINE_LABELS[window.instantEngineUsed] || window.instantEngineUsed || '');
+                        if (label) {
+                            engineLabelEl.textContent = label;
+                            engineInfo.classList.remove('hidden');
+                        } else {
+                            engineLabelEl.textContent = '';
+                            engineInfo.classList.add('hidden');
+                        }
+                    }
                     document.getElementById('instantDownloadLink').href = response.data.download_url;
                     document.getElementById('instantResult').classList.remove('hidden');
                     showAlert('تمت الترجمة بنجاح!', 'success');
@@ -2619,6 +2670,7 @@
             const mode = document.querySelector('input[name="transcribeMode"]:checked')?.value || 'file';
             const language = document.getElementById('transcribeLanguage')?.value || 'auto';
             const model = document.getElementById('whisperModel')?.value || 'base';
+            const engine = document.getElementById('transcribeEngine')?.value || 'auto';
             
             const startBtn = document.getElementById('transcribeStartBtn');
             const progressDiv = document.getElementById('transcribeProgress');
@@ -2642,6 +2694,7 @@
                     formData.append('file', file);
                     formData.append('language', language);
                     formData.append('model', model);
+                    formData.append('engine', engine);
 
                     response = await axios.post('/api/transcribe', formData, {
                         headers: { 'Content-Type': 'multipart/form-data' }
@@ -2659,7 +2712,8 @@
                         url: url,
                         quality: quality,
                         language: language,
-                        model: model
+                        model: model,
+                        engine: engine
                     });
                 }
                 
@@ -2667,10 +2721,15 @@
                     const resultDiv = document.getElementById('transcribeResult');
                     const srtUrl = response.data.srt_url || (response.data.srt_file ? `/download/${response.data.srt_file}` : null);
                     const hasSegments = response.data.segments && response.data.segments.length > 0;
+                    const engineUsed = response.data.engine || engine;
+                    const engineLabel = ENGINE_LABELS[engineUsed] || engineUsed || 'غير محدد';
                     
                     resultDiv.innerHTML = `
                         <div class="glass-strong rounded-xl p-6">
                             <h4 class="text-green-400 font-bold mb-4"><i class="bi bi-check-circle-fill"></i> تم التحويل بنجاح!</h4>
+                            <div class="mb-3 text-sm text-blue-300">
+                                <i class="bi bi-cpu"></i> المحرك المستخدم: <span class="font-semibold">${engineLabel}</span>
+                            </div>
                             <div class="mb-4">
                                 <label class="block text-sm font-semibold mb-2">النص المحول:</label>
                                 <textarea class="input-glass w-full px-4 py-3 rounded-xl" rows="10" readonly>${response.data.text || ''}</textarea>
