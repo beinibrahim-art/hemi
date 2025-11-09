@@ -1892,7 +1892,7 @@ class VideoProcessor:
             primary_filter = VideoProcessor._build_filter_expression(
                 'subtitles' if is_srt else 'ass',
                 subtitle_path,
-                options={'charenc': 'UTF-8', 'force_style': 'WrapStyle=0'} if is_srt else None
+                options={'charenc': 'UTF-8', 'force_style': "'WrapStyle=0'"} if is_srt else None
             )
             success, _ = execute_filter(primary_filter, subtitle_path)
 
