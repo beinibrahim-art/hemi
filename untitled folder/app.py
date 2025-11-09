@@ -59,6 +59,7 @@ app.config.update(
     DOWNLOAD_FOLDER='downloads',
     OUTPUT_FOLDER='outputs',
     SUBTITLE_FOLDER='subtitles',
+    MODEL_CACHE_DIR='model_cache',
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     PERMANENT_SESSION_LIFETIME=1800
@@ -76,7 +77,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # إنشاء المجلدات المطلوبة
-for folder in ['uploads', 'downloads', 'outputs', 'subtitles', 'templates', 'static']:
+required_folders = [
+    'uploads',
+    'downloads',
+    'outputs',
+    'subtitles',
+    'templates',
+    'static',
+    app.config['MODEL_CACHE_DIR']
+]
+
+for folder in required_folders:
     Path(folder).mkdir(exist_ok=True)
 
 
@@ -160,6 +171,14 @@ class WhisperTranscriber:
         self.model_cache = {}
         self.whisperx_model_cache = {}
         self.align_model_cache = {}
+        self.base_cache_dir = Path(app.config.get('MODEL_CACHE_DIR', 'model_cache')).resolve()
+        self.whisper_cache_dir = self.base_cache_dir / 'whisper'
+        self.whisperx_cache_dir = self.base_cache_dir / 'whisperx'
+        self.align_cache_dir = self.base_cache_dir / 'align'
+
+        self.whisper_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.whisperx_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.align_cache_dir.mkdir(parents=True, exist_ok=True)
 
     def transcribe(self, audio_file: str, model_size: str = 'base',
                    language: str = 'auto') -> Dict:
@@ -203,7 +222,12 @@ class WhisperTranscriber:
         cache_key = ('faster', model_size, device, compute_type)
         model = self.model_cache.get(cache_key)
         if model is None:
-            model = WhisperModel(model_size, device=device, compute_type=compute_type)
+            model = WhisperModel(
+                model_size,
+                device=device,
+                compute_type=compute_type,
+                download_root=str(self.whisper_cache_dir)
+            )
             self.model_cache[cache_key] = model
         return model
 
@@ -221,7 +245,8 @@ class WhisperTranscriber:
                 model_size,
                 device,
                 compute_type=compute_type,
-                asr_options=asr_options
+                asr_options=asr_options,
+                download_root=str(self.whisperx_cache_dir)
             )
             self.whisperx_model_cache[cache_key] = model
         return model
@@ -233,7 +258,8 @@ class WhisperTranscriber:
         if resources is None:
             align_model, metadata = whisperx.load_align_model(
                 language_code=lang,
-                device=device
+                device=device,
+                download_root=str(self.align_cache_dir)
             )
             resources = (align_model, metadata)
             self.align_model_cache[cache_key] = resources
@@ -397,7 +423,7 @@ class WhisperTranscriber:
         """استخدام Whisper العادي مع إعدادات محسّنة"""
         model = self.model_cache.get(model_size)
         if model is None:
-            model = whisper.load_model(model_size)
+            model = whisper.load_model(model_size, download_root=str(self.whisper_cache_dir))
             self.model_cache[model_size] = model
 
         punctuation_prepend = "\"'“”¿([{-"
@@ -1178,7 +1204,7 @@ class VideoProcessor:
             return False
     
     @staticmethod
-    def _build_filter_expression(filter_name: str, subtitle_file: Path) -> str:
+    def _build_filter_expression(filter_name: str, subtitle_file: Path, options: Dict[str, str] = None) -> str:
         """
         إنشاء تعبير ffmpeg للـ filter مع التعامل مع المسارات التي تحتوي على فراغات أو رموز خاصة.
         يتم استخدام علامات الاقتباس الأحادية لأن ffmpeg يتعامل معها داخلياً بدون تدخل shell.
@@ -1186,7 +1212,15 @@ class VideoProcessor:
         path_str = subtitle_file.as_posix()
         # الهروب من المحارف التي قد تكسر بناء الجملة داخل filter expression
         path_str = path_str.replace('\\', r'\\').replace("'", r"\'")
-        return f"{filter_name}='{path_str}'"
+        expr = f"{filter_name}='{path_str}'"
+        if options:
+            option_parts = []
+            for key, value in options.items():
+                sanitized_value = str(value).replace(':', r'\:')
+                option_parts.append(f"{key}={sanitized_value}")
+            if option_parts:
+                expr = f"{expr}:" + ":".join(option_parts)
+        return expr
     
     @staticmethod
     def _merge_subtitles_legacy(video_path: str, subtitle_path: str, 
@@ -1547,7 +1581,7 @@ class VideoProcessor:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             is_srt = subtitle_path.suffix.lower() == '.srt'
 
-            def execute_filter(filter_expr: str, subtitle_file: Path, include_charenc: bool) -> Tuple[bool, subprocess.CompletedProcess]:
+            def execute_filter(filter_expr: str, subtitle_file: Path) -> Tuple[bool, subprocess.CompletedProcess]:
                 cmd = [
                     'ffmpeg',
                     '-i', str(video_input),
@@ -1563,9 +1597,6 @@ class VideoProcessor:
                     '-movflags', '+faststart',
                     '-threads', '0'
                 ]
-
-                if include_charenc:
-                    cmd.extend(['-sub_charenc', 'UTF-8'])
 
                 cmd.extend(['-f', 'mp4', '-y', str(output_path)])
 
@@ -1594,9 +1625,10 @@ class VideoProcessor:
 
             primary_filter = VideoProcessor._build_filter_expression(
                 'subtitles' if is_srt else 'ass',
-                subtitle_path
+                subtitle_path,
+                options={'charenc': 'UTF-8'} if is_srt else None
             )
-            success, _ = execute_filter(primary_filter, subtitle_path, is_srt)
+            success, _ = execute_filter(primary_filter, subtitle_path)
 
             if success and output_path.exists():
                 file_size = output_path.stat().st_size
@@ -1628,7 +1660,7 @@ class VideoProcessor:
                     return False
 
                 fallback_filter = VideoProcessor._build_filter_expression('ass', ass_path)
-                success_alt, _ = execute_filter(fallback_filter, ass_path, include_charenc=False)
+                success_alt, _ = execute_filter(fallback_filter, ass_path)
 
                 if success_alt and output_path.exists():
                     file_size = output_path.stat().st_size
@@ -2482,7 +2514,31 @@ def api_instant_translate():
                     'message': 'ملف الصوت غير موجود'
                 }), 400
             
-            result = whisper_transcriber.transcribe(audio_file, model, language)
+            try:
+                result = whisper_transcriber.transcribe(audio_file, model, language)
+            except Exception as e:
+                logger.error(f"Transcription failed: {e}")
+                logger.error(traceback.format_exc())
+                return jsonify({
+                    'success': False,
+                    'message': f'خطأ في تحويل الصوت إلى نص: {str(e)}'
+                }), 500
+
+            text = (result.get('text') or '').strip()
+            if not text and result.get('segments'):
+                recovered_text_parts = [
+                    seg.get('text', '').strip()
+                    for seg in result['segments']
+                    if seg.get('text')
+                ]
+                text = ' '.join(part for part in recovered_text_parts if part)
+                result['text'] = text
+
+            if not text:
+                return jsonify({
+                    'success': False,
+                    'message': 'لم يتم التعرف على أي نص في المقطع الصوتي'
+                }), 400
             
             # حفظ في ملف مؤقت (JSON للحفاظ على segments مع التوقيتات)
             temp_file = Path(app.config['DOWNLOAD_FOLDER']) / f"temp_transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
